@@ -8,8 +8,8 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = "每日新聞";
 
-const PRIMARY_MODEL = "gemini-2.0-flash-lite";
-const BACKUP_MODEL = "gemini-1.5-flash";
+const PRIMARY_MODEL = "gemini-2.5-flash-lite";
+const BACKUP_MODEL = "gemini-2.5-flash";
 
 const RETRY_TARGET_TEXT = "AI摘要失敗";
 const MAX_RETRY_PER_RUN = 20;
