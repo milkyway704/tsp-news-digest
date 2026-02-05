@@ -14,8 +14,8 @@ const SHEET_NAME = "每日新聞";
 const GEMINI_MODEL = "gemini-2.0-flash-lite";
 const TIMEZONE = "Asia/Taipei";
 const MAX_FULLTEXT_LENGTH = 20000;
-const GEMINI_MAX_RETRY = 2;
-const SLEEP_MS = 4000;
+const GEMINI_MAX_RETRY = 3; // 稍微增加重試次數
+const SLEEP_MS = 4500; // 提高延遲至 4.5 秒，徹底避開免費版 15 RPM 限制
 
 // =========================
 // CNA RSS 配置
@@ -75,6 +75,7 @@ async function main() {
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
+	// 取得台灣日期
 	const today = new Date(new Date().getTime() + 8 * 3600000)
 		.toISOString()
 		.slice(0, 10);
@@ -125,6 +126,7 @@ async function main() {
 				]);
 
 				existingLinks.add(link);
+				// 強制延遲，確保不衝撞 API 頻率限制
 				await sleep(SLEEP_MS);
 			}
 		} catch (err) {
@@ -135,32 +137,23 @@ async function main() {
 }
 
 // =========================
-// 文本清洗工具
+// 文本處理工具
 // =========================
 
 function cleanText(text) {
 	if (!text) return "";
-	return (
-		text
-			// 移除中央社版權宣告與 App 推廣
-			.replace(/中央社「一手新聞」\s*app/gi, "")
-			.replace(
-				/本網站之文字、圖片及影音，非經授權，不得轉載、公開播送或公開傳輸及利用。/g,
-				"",
-			)
-			// 移除文章末尾的編輯資訊與代碼（例如：1150205）
-			.replace(/（編輯：.*?）\d+$/g, "")
-			// 移除常見的「相關新聞」與「延伸閱讀」整行文字（避免觸發過濾）
-			.replace(/延伸閱讀.*$/gm, "")
-			.replace(/相關新聞.*$/gm, "")
-			.replace(/\s+/g, " ")
-			.trim()
-	);
+	return text
+		.replace(/中央社「一手新聞」\s*app/gi, "")
+		.replace(
+			/本網站之文字、圖片及影音，非經授權，不得轉載、公開播送或公開傳輸及利用。/g,
+			"",
+		)
+		.replace(/（編輯：.*?）\d+$/g, "")
+		.replace(/延伸閱讀.*$/gm, "")
+		.replace(/相關新聞.*$/gm, "")
+		.replace(/\s+/g, " ")
+		.trim();
 }
-
-// =========================
-// 中央社正文擷取與過濾
-// =========================
 
 async function fetchCnaArticleText(url) {
 	try {
@@ -192,9 +185,7 @@ async function fetchCnaArticleText(url) {
 			if (m) rawText = decodeJsonText(m[1]);
 		}
 
-		// 重點：先清洗掉可能干擾判斷的「關鍵字」
-		const cleaned = cleanText(rawText);
-		return cleaned.substring(0, MAX_FULLTEXT_LENGTH);
+		return cleanText(rawText).substring(0, MAX_FULLTEXT_LENGTH);
 	} catch (e) {
 		return "";
 	}
@@ -202,13 +193,8 @@ async function fetchCnaArticleText(url) {
 
 function isLikelyCnaArticleText(text) {
 	if (!text || text.length < 50) return false;
-
-	// 改良點：不再因為「延伸閱讀」關鍵字就整篇丟棄
-	// 改為檢查「中文密度」，只要這篇像人話，就送去摘要
 	const chineseChars = text.match(/[\u4e00-\u9fff]/g) || [];
-	const ratio = chineseChars.length / text.length;
-
-	return ratio > 0.25;
+	return chineseChars.length / text.length > 0.25;
 }
 
 function decodeJsonText(s) {
@@ -221,11 +207,11 @@ function decodeJsonText(s) {
 }
 
 // =========================
-// Gemini 摘要
+// Gemini 摘要 (含 429 退避邏輯)
 // =========================
 
 async function summarizeWithRetry(text) {
-	let wait = 5000; // 初始重試等待拉長到 5 秒
+	let wait = 6000;
 	for (let i = 0; i < GEMINI_MAX_RETRY; i++) {
 		try {
 			const s = await callGemini(text);
@@ -234,14 +220,12 @@ async function summarizeWithRetry(text) {
 			}
 		} catch (e) {
 			if (e.message === "429") {
-				console.log(
-					`觸發速率限制 (429)，等待 ${wait / 1000} 秒後重試... (${i + 1})`,
-				);
+				console.log(`觸發 429 限制，等待 ${wait / 1000} 秒後重試...`);
 				await sleep(wait);
-				wait *= 2; // 指數退避：5s -> 10s
+				wait *= 2;
 				continue;
 			}
-			console.error(`Gemini 發生非 429 錯誤: ${e.message}`);
+			console.error(`Gemini 錯誤: ${e.message}`);
 			break;
 		}
 	}
@@ -249,12 +233,12 @@ async function summarizeWithRetry(text) {
 }
 
 async function callGemini(text) {
-	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明等無關文字。
+	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明等文字。
   
-【輸出格式】：必須回傳純 JSON 格式如下，不要包含 Markdown 標籤：
-{ "title": "新聞標題", "points": ["重點1", "重點2", "重點3"] }
+【格式】：必須回傳純 JSON，不要 Markdown：
+{ "title": "標題", "points": ["點1", "點2", "點3"] }
 
-新聞內容：\n${text}`;
+內容：\n${text}`;
 
 	const res = await fetch(
 		`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
@@ -265,25 +249,13 @@ async function callGemini(text) {
 		},
 	);
 
-	// 關鍵：明確捕捉 429 狀態碼
-	if (res.status === 429) {
-		throw new Error("429");
-	}
-
-	if (!res.ok) {
-		throw new Error(`HTTP ${res.status}`);
-	}
+	if (res.status === 429) throw new Error("429");
+	if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
 	const json = await res.json();
 	let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
 	raw = raw.replace(/```json|```/g, "").trim();
-
-	try {
-		return JSON.parse(raw);
-	} catch (err) {
-		console.error("JSON 解析失敗，原始文字:", raw);
-		throw new Error("JSON_PARSE_ERROR");
-	}
+	return JSON.parse(raw);
 }
 
 function formatSummary(s) {

@@ -16,12 +16,11 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: 20
-                  # 新增這行：自動根據 package-lock.json 快取 npm 套件
-                  cache: "npm"
+                  # 已移除 cache: "npm"，避免找不到 lock 檔的錯誤
 
             - name: Install dependencies
-              # 使用 npm ci 取代 npm install，專為 CI 環境設計，安裝更快速且穩定
-              run: npm ci
+              # 改回使用 npm install
+              run: npm install
 
             - name: Run script
               run: node index.js
