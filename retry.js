@@ -8,13 +8,12 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = "每日新聞";
 
-// 模型定義
 const PRIMARY_MODEL = "gemini-2.0-flash-lite";
 const BACKUP_MODEL = "gemini-1.5-flash";
 
 const RETRY_TARGET_TEXT = "AI摘要失敗";
 const MAX_RETRY_PER_RUN = 20;
-const BASE_SLEEP_MS = 6000; // 基礎間隔 6 秒
+const BASE_SLEEP_MS = 8000; // 基礎間隔提升至 8 秒，確保穩定
 
 // =========================
 // Google Sheets Client
@@ -31,7 +30,7 @@ async function getSheetClient() {
 // 主流程
 // =========================
 async function retryFailedSummaries() {
-	console.log("開始執行階梯式重試任務...");
+	console.log("開始執行階梯式重試任務（含 429 強制冷卻）...");
 	const sheets = await getSheetClient();
 
 	const res = await sheets.spreadsheets.values.get({
@@ -51,22 +50,27 @@ async function retryFailedSummaries() {
 		const fullText = rows[i][6] || "";
 
 		if (summaryCell.includes(RETRY_TARGET_TEXT) && fullText.length > 50) {
-			console.log(`--- 正在處理第 ${i + 1} 列 ---`);
+			console.log(`\n--- 正在處理第 ${i + 1} 列 ---`);
 
 			let finalResult = null;
 
-			// 階段一：嘗試使用 2.0 Flash-Lite
+			// 【階段一】嘗試使用 2.0 Flash-Lite
 			console.log(`[嘗試 1] 使用 ${PRIMARY_MODEL}...`);
 			finalResult = await callGemini(fullText, PRIMARY_MODEL);
 
-			// 階段二：如果 429，切換到 1.5 Flash
+			// 【階段二】如果 429，強制進入長冷卻，再換模型
 			if (finalResult.status === "429_limit") {
-				console.log(`[觸發 429] 正在切換備用模型 ${BACKUP_MODEL}...`);
-				await new Promise((r) => setTimeout(r, 2000)); // 切換時稍等 2 秒
+				console.warn(
+					`⚠️ 觸發 429 限制。雖然 Quota 充足，但可能觸發併發保護。`,
+				);
+				console.log(`系統強制冷卻 20 秒，請稍候...`);
+				await new Promise((r) => setTimeout(r, 20000)); // 強制重置流量計數器
+
+				console.log(`[嘗試 2] 切換至備用模型 ${BACKUP_MODEL}...`);
 				finalResult = await callGemini(fullText, BACKUP_MODEL);
 			}
 
-			// 處理最終結果
+			// 最終結果寫入處理
 			if (finalResult.status === "success") {
 				const formattedSummary = formatSummary(finalResult.summary);
 				await sheets.spreadsheets.values.update({
@@ -77,29 +81,32 @@ async function retryFailedSummaries() {
 				});
 				console.log(`✅ 第 ${i + 1} 列更新成功！`);
 			} else {
-				console.log(
-					`❌ 第 ${i + 1} 列重試最終失敗: ${finalResult.status}`,
-				);
-				// 更新標記，避免重複無效重試
-				await sheets.spreadsheets.values.update({
-					spreadsheetId: SHEET_ID,
-					range: `${SHEET_NAME}!F${i + 1}`,
-					valueInputOption: "RAW",
-					requestBody: {
-						values: [
-							[`AI摘要失敗[${finalResult.status}]，請手動處理`],
-						],
-					},
-				});
+				console.log(`❌ 第 ${i + 1} 列最終失敗: ${finalResult.status}`);
+				// 只有在非 429 的情況下才更新失敗標記，如果是 429 則保留讓下次重試
+				if (finalResult.status !== "429_limit") {
+					await sheets.spreadsheets.values.update({
+						spreadsheetId: SHEET_ID,
+						range: `${SHEET_NAME}!F${i + 1}`,
+						valueInputOption: "RAW",
+						requestBody: {
+							values: [
+								[
+									`AI摘要失敗[${finalResult.status}]，請手動處理`,
+								],
+							],
+						},
+					});
+				}
 			}
 
 			retriedCount++;
-			// 每篇新聞之間的基礎冷卻 + 隨機抖動 (避免規律性觸發防火牆)
-			const jitter = Math.random() * 3000;
+			// 每篇新聞處理完後的抖動冷卻
+			const jitter = Math.random() * 4000;
+			console.log(`完成。等待下一則...`);
 			await new Promise((r) => setTimeout(r, BASE_SLEEP_MS + jitter));
 		}
 	}
-	console.log(`任務結束。`);
+	console.log(`\n任務執行結束。`);
 }
 
 async function callGemini(text, model) {
