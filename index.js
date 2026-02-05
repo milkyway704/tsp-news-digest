@@ -139,16 +139,21 @@ async function main() {
 // =========================
 
 function cleanText(text) {
+	if (!text) return "";
 	return (
 		text
-			// 移除中央社常見的網頁雜訊
+			// 移除中央社版權宣告與 App 推廣
 			.replace(/中央社「一手新聞」\s*app/gi, "")
 			.replace(
 				/本網站之文字、圖片及影音，非經授權，不得轉載、公開播送或公開傳輸及利用。/g,
 				"",
 			)
+			// 移除文章末尾的編輯資訊與代碼（例如：1150205）
 			.replace(/（編輯：.*?）\d+$/g, "")
-			.replace(/\s+/g, " ") // 合併多餘空格與換行
+			// 移除常見的「相關新聞」與「延伸閱讀」整行文字（避免觸發過濾）
+			.replace(/延伸閱讀.*$/gm, "")
+			.replace(/相關新聞.*$/gm, "")
+			.replace(/\s+/g, " ")
 			.trim()
 	);
 }
@@ -187,8 +192,9 @@ async function fetchCnaArticleText(url) {
 			if (m) rawText = decodeJsonText(m[1]);
 		}
 
-		// 執行清洗
-		return cleanText(rawText).substring(0, MAX_FULLTEXT_LENGTH);
+		// 重點：先清洗掉可能干擾判斷的「關鍵字」
+		const cleaned = cleanText(rawText);
+		return cleaned.substring(0, MAX_FULLTEXT_LENGTH);
 	} catch (e) {
 		return "";
 	}
@@ -196,12 +202,13 @@ async function fetchCnaArticleText(url) {
 
 function isLikelyCnaArticleText(text) {
 	if (!text || text.length < 50) return false;
-	// 排除廣告與延伸閱讀關鍵字
-	const noise = [/延伸閱讀/, /相關新聞/, /推薦/, /影片來源/];
-	if (noise.some((p) => p.test(text))) return false;
 
+	// 改良點：不再因為「延伸閱讀」關鍵字就整篇丟棄
+	// 改為檢查「中文密度」，只要這篇像人話，就送去摘要
 	const chineseChars = text.match(/[\u4e00-\u9fff]/g) || [];
-	return chineseChars.length / text.length > 0.25;
+	const ratio = chineseChars.length / text.length;
+
+	return ratio > 0.25;
 }
 
 function decodeJsonText(s) {
