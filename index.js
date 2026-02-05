@@ -1,7 +1,9 @@
 import fetch from "node-fetch";
-import cheerio from "cheerio";
 import { parseStringPromise } from "xml2js";
 import { google } from "googleapis";
+import * as cheerio from "cheerio";
+const $ = cheerio.load("<div>Hello</div>");
+console.log($("div").text());
 
 // =========================
 // 設定
