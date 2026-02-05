@@ -75,7 +75,6 @@ async function main() {
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
-	// 修正日期判斷：使用台灣時間
 	const today = new Date(new Date().getTime() + 8 * 3600000)
 		.toISOString()
 		.slice(0, 10);
@@ -136,6 +135,25 @@ async function main() {
 }
 
 // =========================
+// 文本清洗工具
+// =========================
+
+function cleanText(text) {
+	return (
+		text
+			// 移除中央社常見的網頁雜訊
+			.replace(/中央社「一手新聞」\s*app/gi, "")
+			.replace(
+				/本網站之文字、圖片及影音，非經授權，不得轉載、公開播送或公開傳輸及利用。/g,
+				"",
+			)
+			.replace(/（編輯：.*?）\d+$/g, "")
+			.replace(/\s+/g, " ") // 合併多餘空格與換行
+			.trim()
+	);
+}
+
+// =========================
 // 中央社正文擷取與過濾
 // =========================
 
@@ -148,8 +166,7 @@ async function fetchCnaArticleText(url) {
 		const html = await res.text();
 		const $ = cheerio.load(html);
 
-		let text = "";
-		// 優先順序：paragraph > article-body > article-content
+		let rawText = "";
 		const selectors = [
 			"div.paragraph",
 			"div.article-body",
@@ -159,19 +176,19 @@ async function fetchCnaArticleText(url) {
 			const found = $(sel);
 			if (found.length > 0) {
 				found.each((_, el) => {
-					text += $(el).text() + "\n";
+					rawText += $(el).text() + "\n";
 				});
 				break;
 			}
 		}
 
-		// JSON articleBody fallback
-		if (!text) {
+		if (!rawText) {
 			const m = html.match(/"articleBody":"([\s\S]*?)"/i);
-			if (m) text = decodeJsonText(m[1]);
+			if (m) rawText = decodeJsonText(m[1]);
 		}
 
-		return text.trim().substring(0, MAX_FULLTEXT_LENGTH);
+		// 執行清洗
+		return cleanText(rawText).substring(0, MAX_FULLTEXT_LENGTH);
 	} catch (e) {
 		return "";
 	}
@@ -218,9 +235,12 @@ async function summarizeWithRetry(text) {
 }
 
 async function callGemini(text) {
-	const prompt = `你是新聞摘要 API，只能輸出 JSON。
-格式規範：{ "title": "標題", "points": ["重點1", "重點2", "重點3"] }
-points 最多三個。不得輸出任何其他解釋性文字。
+	// 在 Prompt 中明確要求忽略版權文字
+	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明、編輯名稱等無關文字。
+  
+【輸出格式】：必須回傳純 JSON 格式如下，不要包含 Markdown 標籤：
+{ "title": "新聞標題", "points": ["重點1", "重點2", "重點3"] }
+
 新聞內容：\n${text}`;
 
 	const res = await fetch(
@@ -234,7 +254,6 @@ points 最多三個。不得輸出任何其他解釋性文字。
 
 	const json = await res.json();
 	let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
-	// 清理 Markdown 標籤
 	raw = raw.replace(/```json|```/g, "").trim();
 	return JSON.parse(raw);
 }
@@ -245,5 +264,4 @@ function formatSummary(s) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 啟動程式
 main().catch(console.error);
