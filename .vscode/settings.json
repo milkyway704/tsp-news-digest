@@ -1,0 +1,11 @@
+{
+    "cSpell.words": [
+        "FULLTEXT"
+    ],
+    "files.associations": {
+        "index.js": "javascript"
+    },
+    "[javascript]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    }
+}
