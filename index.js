@@ -220,18 +220,24 @@ function cleanText(text) {
 async function fetchCnaArticleText(url) {
 	try {
 		const res = await fetch(url, {
-			headers: { "User-Agent": "Mozilla/5.0" },
+			headers: {
+				"User-Agent":
+					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+			},
 		});
 		if (!res.ok) return "";
 		const html = await res.text();
 		const $ = cheerio.load(html);
 
 		let rawText = "";
+
+		// 1. 標準選取器 (優先順序：paragraph > article-body > article-content)
 		const selectors = [
 			"div.paragraph",
 			"div.article-body",
 			"div.article-content",
 		];
+
 		for (const sel of selectors) {
 			const found = $(sel);
 			if (found.length > 0) {
@@ -242,13 +248,31 @@ async function fetchCnaArticleText(url) {
 			}
 		}
 
-		if (!rawText) {
+		// 2. 如果還是沒抓到，嘗試 JSON-LD (articleBody)
+		if (!rawText.trim()) {
 			const m = html.match(/"articleBody":"([\s\S]*?)"/i);
 			if (m) rawText = decodeJsonText(m[1]);
 		}
 
+		// 3. 【核心補強】針對影片新聞頁面 (fallback 到所有 <p> 標籤)
+		// 許多影片頁面內容分散在多個 <p> 標籤中，沒有包裹在上述 div 內
+		if (!rawText.trim()) {
+			const isVideoPage = /<video|iframe|data-video/i.test(html);
+			if (isVideoPage) {
+				console.log("偵測為影片新聞頁面，使用替代抓取邏輯...");
+				$("p").each((_, el) => {
+					const txt = $(el).text().trim();
+					// 排除過短或雜訊標籤
+					if (txt.length > 10) {
+						rawText += txt + "\n";
+					}
+				});
+			}
+		}
+
 		return cleanText(rawText).substring(0, MAX_FULLTEXT_LENGTH);
 	} catch (e) {
+		console.error(`擷取全文失敗 (${url}):`, e.message);
 		return "";
 	}
 }
