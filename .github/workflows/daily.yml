@@ -2,7 +2,9 @@ name: CNA News Bot
 
 on:
     schedule:
-        - cron: "0 0,10 * * *" # UTC 00,10 = 台灣 08:00, 18:00
+        # 台灣時間 09:00, 13:00, 17:00, 21:00
+        # 對應 UTC 01:00, 05:00, 09:00, 13:00
+        - cron: "0 1,5,9,13 * * *"
     workflow_dispatch:
 
 jobs:
@@ -16,11 +18,10 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: 20
-                  # 已移除 cache: "npm"，避免找不到 lock 檔的錯誤
+                  cache: "npm"
 
             - name: Install dependencies
-              # 改回使用 npm install
-              run: npm install
+              run: npm ci
 
             - name: Run script
               run: node index.js
