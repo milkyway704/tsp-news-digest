@@ -2,8 +2,6 @@ import fetch from "node-fetch";
 import { parseStringPromise } from "xml2js";
 import { google } from "googleapis";
 import * as cheerio from "cheerio";
-const $ = cheerio.load("<div>Hello</div>");
-console.log($("div").text());
 
 // =========================
 // 設定
@@ -20,7 +18,7 @@ const GEMINI_MAX_RETRY = 2;
 const SLEEP_MS = 1000;
 
 // =========================
-// CNA RSS
+// CNA RSS 配置
 // =========================
 
 const CNA_RSS_CONFIG = [
@@ -35,7 +33,7 @@ const CNA_RSS_CONFIG = [
 ];
 
 // =========================
-// Google Sheets
+// Google Sheets API
 // =========================
 
 async function getSheetClient() {
@@ -43,17 +41,20 @@ async function getSheetClient() {
 		credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
 		scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 	});
-
 	return google.sheets({ version: "v4", auth });
 }
 
 async function getExistingLinks(sheets) {
-	const res = await sheets.spreadsheets.values.get({
-		spreadsheetId: SHEET_ID,
-		range: `${SHEET_NAME}!E2:E`,
-	});
-
-	return new Set((res.data.values || []).flat());
+	try {
+		const res = await sheets.spreadsheets.values.get({
+			spreadsheetId: SHEET_ID,
+			range: `${SHEET_NAME}!E2:E`,
+		});
+		return new Set((res.data.values || []).flat());
+	} catch (e) {
+		console.log("讀取現有連結失敗或工作表為空");
+		return new Set();
+	}
 }
 
 async function appendRow(sheets, row) {
@@ -70,104 +71,120 @@ async function appendRow(sheets, row) {
 // =========================
 
 async function main() {
+	console.log("開始執行新聞爬取任務...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
-	const today = new Date().toISOString().slice(0, 10);
+
+	// 修正日期判斷：使用台灣時間
+	const today = new Date(new Date().getTime() + 8 * 3600000)
+		.toISOString()
+		.slice(0, 10);
+	console.log(`目標日期: ${today}`);
 
 	for (const cfg of CNA_RSS_CONFIG) {
-		const rss = await fetch(cfg.url).then((r) => r.text());
-		const parsed = await parseStringPromise(rss);
-		const items = parsed.rss.channel[0].item || [];
+		console.log(`正在抓取 [${cfg.type}] 類別...`);
+		try {
+			const rssResponse = await fetch(cfg.url);
+			const rssText = await rssResponse.text();
+			const parsed = await parseStringPromise(rssText);
+			const items = parsed.rss.channel[0].item || [];
 
-		for (const item of items) {
-			const link = item.link[0];
-			if (!link || existingLinks.has(link)) continue;
+			for (const item of items) {
+				const link = item.link[0];
+				if (!link || existingLinks.has(link)) continue;
 
-			const pubDate = new Date(item.pubDate[0])
-				.toISOString()
-				.slice(0, 10);
-			if (pubDate !== today) continue;
+				const pubDate = new Date(item.pubDate[0])
+					.toISOString()
+					.slice(0, 10);
+				if (pubDate !== today) continue;
 
-			const title = item.title[0];
-			const fullText = await fetchCnaArticleText(link);
+				const title = item.title[0];
+				console.log(`處理中: ${title}`);
 
-			let summaryResult;
-			if (!fullText) {
-				summaryResult = { status: "no_text" };
-			} else {
-				summaryResult = await summarizeWithRetry(fullText);
+				const fullText = await fetchCnaArticleText(link);
+
+				let summaryResult;
+				if (!fullText || !isLikelyCnaArticleText(fullText)) {
+					summaryResult = { status: "no_text_or_invalid" };
+				} else {
+					summaryResult = await summarizeWithRetry(fullText);
+				}
+
+				const summaryText =
+					summaryResult.status === "success"
+						? formatSummary(summaryResult.summary)
+						: `AI摘要失敗[${summaryResult.status}]，請手動處理`;
+
+				await appendRow(sheets, [
+					today,
+					"中央社",
+					cfg.type,
+					title,
+					link,
+					summaryText,
+					fullText || "(無法擷取全文)",
+				]);
+
+				existingLinks.add(link);
+				await sleep(SLEEP_MS);
 			}
-
-			const summaryText =
-				summaryResult.status === "success"
-					? formatSummary(summaryResult.summary)
-					: `AI摘要失敗[${summaryResult.status}]，請手動處理`;
-
-			await appendRow(sheets, [
-				today,
-				"中央社",
-				cfg.type,
-				title,
-				link,
-				summaryText,
-				fullText,
-			]);
-
-			existingLinks.add(link);
-			await sleep(SLEEP_MS);
+		} catch (err) {
+			console.error(`處理類別 ${cfg.type} 時發生錯誤:`, err.message);
 		}
 	}
+	console.log("任務完成");
 }
 
-main().catch(console.error);
-
 // =========================
-// CNA 正文擷取（hybrid）
+// 中央社正文擷取與過濾
 // =========================
 
 async function fetchCnaArticleText(url) {
-	const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-	if (!res.ok) return "";
+	try {
+		const res = await fetch(url, {
+			headers: { "User-Agent": "Mozilla/5.0" },
+		});
+		if (!res.ok) return "";
+		const html = await res.text();
+		const $ = cheerio.load(html);
 
-	const html = await res.text();
-
-	// ① paragraph / article-body
-	let text = extract(html, ["div.paragraph", "div.article-body"]);
-
-	// ② JSON articleBody
-	if (!text) {
-		const m = html.match(/"articleBody":"([\s\S]*?)"/i);
-		if (m) {
-			text = decodeJsonText(m[1]);
+		let text = "";
+		// 優先順序：paragraph > article-body > article-content
+		const selectors = [
+			"div.paragraph",
+			"div.article-body",
+			"div.article-content",
+		];
+		for (const sel of selectors) {
+			const found = $(sel);
+			if (found.length > 0) {
+				found.each((_, el) => {
+					text += $(el).text() + "\n";
+				});
+				break;
+			}
 		}
+
+		// JSON articleBody fallback
+		if (!text) {
+			const m = html.match(/"articleBody":"([\s\S]*?)"/i);
+			if (m) text = decodeJsonText(m[1]);
+		}
+
+		return text.trim().substring(0, MAX_FULLTEXT_LENGTH);
+	} catch (e) {
+		return "";
 	}
-
-	// ③ article-content
-	if (!text) {
-		text = extract(html, ["div.article-content"]);
-	}
-
-	// ④ video fallback
-	if (!text && /video|iframe/i.test(html)) {
-		text = extract(html, ["p"]);
-	}
-
-	if (!text) return "";
-
-	text = text.substring(0, MAX_FULLTEXT_LENGTH);
-	return isLikelyCnaArticle(text) ? text : "";
 }
 
-function extract(html, selectors) {
-	const $ = cheerio.load(html);
-	let text = "";
+function isLikelyCnaArticleText(text) {
+	if (!text || text.length < 50) return false;
+	// 排除廣告與延伸閱讀關鍵字
+	const noise = [/延伸閱讀/, /相關新聞/, /推薦/, /影片來源/];
+	if (noise.some((p) => p.test(text))) return false;
 
-	for (const sel of selectors) {
-		$(sel).each((_, el) => {
-			text += $(el).text() + "\n";
-		});
-	}
-	return text.trim();
+	const chineseChars = text.match(/[\u4e00-\u9fff]/g) || [];
+	return chineseChars.length / text.length > 0.25;
 }
 
 function decodeJsonText(s) {
@@ -176,31 +193,23 @@ function decodeJsonText(s) {
 		.replace(/\\n/g, "\n")
 		.replace(/\\u([\dA-Fa-f]{4})/g, (_, h) =>
 			String.fromCharCode(parseInt(h, 16)),
-		)
-		.trim();
-}
-
-function isLikelyCnaArticle(text) {
-	const chinese = text.match(/[\u4e00-\u9fff]/g) || [];
-	if (chinese.length / text.length < 0.25) return false;
-	return true;
+		);
 }
 
 // =========================
-// Gemini
+// Gemini 摘要
 // =========================
 
 async function summarizeWithRetry(text) {
 	let wait = 3000;
-
 	for (let i = 0; i < GEMINI_MAX_RETRY; i++) {
 		try {
 			const s = await callGemini(text);
-			if (isValidSummary(s)) {
+			if (s && s.title && Array.isArray(s.points)) {
 				return { status: "success", summary: s };
 			}
-			return { status: "empty" };
-		} catch {
+		} catch (e) {
+			console.log(`Gemini 重試中... (${i + 1})`);
 			await sleep(wait);
 			wait *= 2;
 		}
@@ -209,34 +218,32 @@ async function summarizeWithRetry(text) {
 }
 
 async function callGemini(text) {
+	const prompt = `你是新聞摘要 API，只能輸出 JSON。
+格式規範：{ "title": "標題", "points": ["重點1", "重點2", "重點3"] }
+points 最多三個。不得輸出任何其他解釋性文字。
+新聞內容：\n${text}`;
+
 	const res = await fetch(
 		`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
 		{
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				contents: [{ parts: [{ text }] }],
-			}),
+			body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
 		},
 	);
 
-	if (res.status === 429) throw new Error("429");
-
 	const json = await res.json();
 	let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
-	raw = raw.replace(/```json|```/g, "");
+	// 清理 Markdown 標籤
+	raw = raw.replace(/```json|```/g, "").trim();
 	return JSON.parse(raw);
 }
 
-function isValidSummary(s) {
-	return s && s.title && Array.isArray(s.points);
-}
-
 function formatSummary(s) {
-	return `${s.title}
-1. ${s.points[0] || ""}
-2. ${s.points[1] || ""}
-3. ${s.points[2] || ""}`;
+	return `${s.title}\n1. ${s.points[0] || ""}\n2. ${s.points[1] || ""}\n3. ${s.points[2] || ""}`;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 啟動程式
+main().catch(console.error);
