@@ -11,11 +11,13 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = "每日新聞";
 
-const GEMINI_MODEL = "gemini-2.0-flash-lite";
+// 模型定義 (升級至 2.5 系列)
+const PRIMARY_MODEL = "gemini-2.5-flash-lite";
+const BACKUP_MODEL = "gemini-2.5-flash";
+
 const TIMEZONE = "Asia/Taipei";
 const MAX_FULLTEXT_LENGTH = 20000;
-const GEMINI_MAX_RETRY = 3; // 稍微增加重試次數
-const SLEEP_MS = 4500; // 提高延遲至 4.5 秒，徹底避開免費版 15 RPM 限制
+const SLEEP_MS = 5000; // 基礎間隔維持在 5 秒
 
 // =========================
 // CNA RSS 配置
@@ -71,11 +73,10 @@ async function appendRow(sheets, row) {
 // =========================
 
 async function main() {
-	console.log("開始執行新聞爬取任務...");
+	console.log("開始執行新聞爬取任務 (Gemini 2.5 雙軌模式)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
-	// 取得台灣日期
 	const today = new Date(new Date().getTime() + 8 * 3600000)
 		.toISOString()
 		.slice(0, 10);
@@ -99,7 +100,7 @@ async function main() {
 				if (pubDate !== today) continue;
 
 				const title = item.title[0];
-				console.log(`處理中: ${title}`);
+				console.log(`\n處理中: ${title}`);
 
 				const fullText = await fetchCnaArticleText(link);
 
@@ -107,7 +108,8 @@ async function main() {
 				if (!fullText || !isLikelyCnaArticleText(fullText)) {
 					summaryResult = { status: "no_text_or_invalid" };
 				} else {
-					summaryResult = await summarizeWithRetry(fullText);
+					// 使用新的階梯式摘要邏輯
+					summaryResult = await summarizeStepwise(fullText);
 				}
 
 				const summaryText =
@@ -126,19 +128,79 @@ async function main() {
 				]);
 
 				existingLinks.add(link);
-				// 強制延遲，確保不衝撞 API 頻率限制
-				await sleep(SLEEP_MS);
+
+				// 基礎延遲加上小抖動，防止規律性觸發限制
+				const jitter = Math.random() * 2000;
+				await sleep(SLEEP_MS + jitter);
 			}
 		} catch (err) {
 			console.error(`處理類別 ${cfg.type} 時發生錯誤:`, err.message);
 		}
 	}
-	console.log("任務完成");
+	console.log("\n任務完成");
 }
 
 // =========================
-// 文本處理工具
+// 摘要核心邏輯 (階梯式)
 // =========================
+
+async function summarizeStepwise(text) {
+	// 階段一：嘗試使用 Lite 模型
+	console.log(`[嘗試 1] 使用 ${PRIMARY_MODEL}...`);
+	let result = await callGemini(text, PRIMARY_MODEL);
+
+	// 階段二：如果 429，冷卻 20 秒後嘗試標準 Flash 模型
+	if (result.status === "429_limit") {
+		console.warn(`⚠️ 觸發 429 限制，進入 20 秒強制冷卻...`);
+		await sleep(20000);
+		console.log(`[嘗試 2] 切換至備用模型 ${BACKUP_MODEL}...`);
+		result = await callGemini(text, BACKUP_MODEL);
+	}
+
+	return result;
+}
+
+async function callGemini(text, model) {
+	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明等文字。
+  
+【格式】：必須回傳純 JSON，不要 Markdown：
+{ "title": "標題", "points": ["點1", "點2", "點3"] }
+
+內容：\n${text}`;
+
+	try {
+		const res = await fetch(
+			`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					contents: [{ parts: [{ text: prompt }] }],
+				}),
+			},
+		);
+
+		if (res.status === 429) return { status: "429_limit" };
+		if (!res.ok) return { status: `HTTP_${res.status}` };
+
+		const json = await res.json();
+		let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
+		raw = raw.replace(/```json|```/g, "").trim();
+		return { status: "success", summary: JSON.parse(raw) };
+	} catch (e) {
+		return { status: "error" };
+	}
+}
+
+// =========================
+// 工具函式
+// =========================
+
+function formatSummary(s) {
+	return `${s.title}\n1. ${s.points[0] || ""}\n2. ${s.points[1] || ""}\n3. ${s.points[2] || ""}`;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function cleanText(text) {
 	if (!text) return "";
@@ -205,63 +267,5 @@ function decodeJsonText(s) {
 			String.fromCharCode(parseInt(h, 16)),
 		);
 }
-
-// =========================
-// Gemini 摘要 (含 429 退避邏輯)
-// =========================
-
-async function summarizeWithRetry(text) {
-	let wait = 6000;
-	for (let i = 0; i < GEMINI_MAX_RETRY; i++) {
-		try {
-			const s = await callGemini(text);
-			if (s && s.title && Array.isArray(s.points)) {
-				return { status: "success", summary: s };
-			}
-		} catch (e) {
-			if (e.message === "429") {
-				console.log(`觸發 429 限制，等待 ${wait / 1000} 秒後重試...`);
-				await sleep(wait);
-				wait *= 2;
-				continue;
-			}
-			console.error(`Gemini 錯誤: ${e.message}`);
-			break;
-		}
-	}
-	return { status: "api_error" };
-}
-
-async function callGemini(text) {
-	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明等文字。
-  
-【格式】：必須回傳純 JSON，不要 Markdown：
-{ "title": "標題", "points": ["點1", "點2", "點3"] }
-
-內容：\n${text}`;
-
-	const res = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-		},
-	);
-
-	if (res.status === 429) throw new Error("429");
-	if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-	const json = await res.json();
-	let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
-	raw = raw.replace(/```json|```/g, "").trim();
-	return JSON.parse(raw);
-}
-
-function formatSummary(s) {
-	return `${s.title}\n1. ${s.points[0] || ""}\n2. ${s.points[1] || ""}\n3. ${s.points[2] || ""}`;
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 main().catch(console.error);
