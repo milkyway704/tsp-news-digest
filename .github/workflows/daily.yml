@@ -9,12 +9,22 @@ jobs:
     run:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-node@v4
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
               with:
                   node-version: 20
-            - run: npm install
-            - run: node index.js
+                  # 新增這行：自動根據 package-lock.json 快取 npm 套件
+                  cache: "npm"
+
+            - name: Install dependencies
+              # 使用 npm ci 取代 npm install，專為 CI 環境設計，安裝更快速且穩定
+              run: npm ci
+
+            - name: Run script
+              run: node index.js
               env:
                   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
                   SHEET_ID: ${{ secrets.SHEET_ID }}
