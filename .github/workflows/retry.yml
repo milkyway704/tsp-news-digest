@@ -1,0 +1,30 @@
+name: Retry Failed Summaries
+
+on:
+    schedule:
+        # 台灣時間 23:00 (UTC 15:00)
+        - cron: "0 15 * * *"
+    workflow_dispatch: # 允許手動觸發
+
+jobs:
+    retry:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Run Retry Script
+              run: node retry.js
+              env:
+                  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+                  SHEET_ID: ${{ secrets.SHEET_ID }}
+                  GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
