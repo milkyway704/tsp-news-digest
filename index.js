@@ -15,7 +15,7 @@ const GEMINI_MODEL = "gemini-2.0-flash-lite";
 const TIMEZONE = "Asia/Taipei";
 const MAX_FULLTEXT_LENGTH = 20000;
 const GEMINI_MAX_RETRY = 2;
-const SLEEP_MS = 1000;
+const SLEEP_MS = 4000;
 
 // =========================
 // CNA RSS 配置
@@ -225,7 +225,7 @@ function decodeJsonText(s) {
 // =========================
 
 async function summarizeWithRetry(text) {
-	let wait = 3000;
+	let wait = 5000; // 初始重試等待拉長到 5 秒
 	for (let i = 0; i < GEMINI_MAX_RETRY; i++) {
 		try {
 			const s = await callGemini(text);
@@ -233,17 +233,23 @@ async function summarizeWithRetry(text) {
 				return { status: "success", summary: s };
 			}
 		} catch (e) {
-			console.log(`Gemini 重試中... (${i + 1})`);
-			await sleep(wait);
-			wait *= 2;
+			if (e.message === "429") {
+				console.log(
+					`觸發速率限制 (429)，等待 ${wait / 1000} 秒後重試... (${i + 1})`,
+				);
+				await sleep(wait);
+				wait *= 2; // 指數退避：5s -> 10s
+				continue;
+			}
+			console.error(`Gemini 發生非 429 錯誤: ${e.message}`);
+			break;
 		}
 	}
 	return { status: "api_error" };
 }
 
 async function callGemini(text) {
-	// 在 Prompt 中明確要求忽略版權文字
-	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明、編輯名稱等無關文字。
+	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明等無關文字。
   
 【輸出格式】：必須回傳純 JSON 格式如下，不要包含 Markdown 標籤：
 { "title": "新聞標題", "points": ["重點1", "重點2", "重點3"] }
@@ -259,10 +265,25 @@ async function callGemini(text) {
 		},
 	);
 
+	// 關鍵：明確捕捉 429 狀態碼
+	if (res.status === 429) {
+		throw new Error("429");
+	}
+
+	if (!res.ok) {
+		throw new Error(`HTTP ${res.status}`);
+	}
+
 	const json = await res.json();
 	let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
 	raw = raw.replace(/```json|```/g, "").trim();
-	return JSON.parse(raw);
+
+	try {
+		return JSON.parse(raw);
+	} catch (err) {
+		console.error("JSON 解析失敗，原始文字:", raw);
+		throw new Error("JSON_PARSE_ERROR");
+	}
 }
 
 function formatSummary(s) {
