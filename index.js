@@ -32,6 +32,9 @@ const CNA_RSS_CONFIG = [
 	{ type: "生活", url: "https://feeds.feedburner.com/rsscna/lifehealth" },
 	{ type: "社會", url: "https://feeds.feedburner.com/rsscna/social" },
 	{ type: "地方", url: "https://feeds.feedburner.com/rsscna/local" },
+	{ type: "文化", url: "https://feeds.feedburner.com/rsscna/culture" },
+	{ type: "運動", url: "https://feeds.feedburner.com/rsscna/sport" },
+	{ type: "娛樂", url: "https://feeds.feedburner.com/rsscna/stars" },
 ];
 
 // =========================
