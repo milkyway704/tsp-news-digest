@@ -316,7 +316,7 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 		const discordConfigs = JSON.parse(configRaw);
 		const targetWebhooks = new Map();
 
-		// 1. 【強化比對邏輯】將物件所有數值串起來比對，防止 undefined 報錯
+		// 1. 將物件所有內容串起來比對
 		const summaryString =
 			typeof summaryObj === "object"
 				? Object.values(summaryObj)
@@ -341,15 +341,33 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 
 		const today = new Date().toLocaleDateString("zh-TW");
 
-		// 2. 【防呆摘要提取】自動過濾掉物件中的標題，只取出點 1~3，若無則顯示原始字串
-		const points =
-			typeof summaryObj === "object"
-				? Object.values(summaryObj).filter(
-						(v) => v && v !== summaryObj.title,
-					)
-				: [summaryObj];
+		// 2. 【核心修正】處理摘要排版：拆分被逗號連在一起的內容
+		let points = [];
+		if (typeof summaryObj === "object") {
+			// 先抓出所有值，過濾掉與新聞大標題相同的內容
+			const rawValues = Object.values(summaryObj).filter(
+				(v) => v && v !== title,
+			);
 
+			// 處理如果 AI 回傳的是帶有逗號的長字串 (如你的截圖狀況)
+			rawValues.forEach((val) => {
+				if (typeof val === "string" && val.includes("，")) {
+					// 根據常見分隔符號拆分，避免一長串擠在一起
+					const splitVals = val
+						.split(/[，,]\s*/)
+						.filter((s) => s.length > 5);
+					points.push(...splitVals);
+				} else {
+					points.push(val);
+				}
+			});
+		} else {
+			points = [summaryObj];
+		}
+
+		// 限制顯示前 3 到 5 點，並加上編號與換行
 		const formattedSummary = points
+			.slice(0, 5)
 			.map((p, i) => `${i + 1}. ${p}`)
 			.join("\n");
 
@@ -357,7 +375,7 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 			const payload = {
 				embeds: [
 					{
-						// 修正：標題直接顯示新聞標題，url 屬性會讓它變成可點擊連結
+						// 修正：標題直接顯示「地區動態 + 新聞標題」
 						title: `📍 ${keyword}動態：${title}`,
 						url: link,
 						description: `**✨ 新聞摘要：**\n${formattedSummary}`,
