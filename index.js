@@ -316,16 +316,15 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 		const discordConfigs = JSON.parse(configRaw);
 		const targetWebhooks = new Map();
 
-		// 【重要修正】將物件內容轉為字串以利比對
-		// 假設 summaryObj 結構是 { title: "...", point1: "...", ... }
-		// 我們把所有內容串成一個大字串
+		// 1. 【強化比對邏輯】將物件所有數值串起來比對，防止 undefined 報錯
 		const summaryString =
 			typeof summaryObj === "object"
-				? Object.values(summaryObj).join(" ")
+				? Object.values(summaryObj)
+						.filter((v) => v)
+						.join(" ")
 				: String(summaryObj);
 
 		for (const config of discordConfigs) {
-			// 現在這裡就不會報錯了，因為 summaryString 是字串
 			const matchedKeyword = config.keywords.find(
 				(k) =>
 					title.includes(k) ||
@@ -342,19 +341,26 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 
 		const today = new Date().toLocaleDateString("zh-TW");
 
-		for (const [webhook, keyword] of targetWebhooks) {
-			// 這裡傳送給 Discord 的內容，要把物件轉回你原本顯示的格式
-			const formattedSummary =
-				typeof summaryObj === "object"
-					? `${summaryObj.title}\n1. ${summaryObj.point1}\n2. ${summaryObj.point2}\n3. ${summaryObj.point3}`
-					: summaryObj;
+		// 2. 【防呆摘要提取】自動過濾掉物件中的標題，只取出點 1~3，若無則顯示原始字串
+		const points =
+			typeof summaryObj === "object"
+				? Object.values(summaryObj).filter(
+						(v) => v && v !== summaryObj.title,
+					)
+				: [summaryObj];
 
+		const formattedSummary = points
+			.map((p, i) => `${i + 1}. ${p}`)
+			.join("\n");
+
+		for (const [webhook, keyword] of targetWebhooks) {
 			const payload = {
 				embeds: [
 					{
-						title: `📍 關鍵字動態：${keyword}`,
+						// 修正：標題直接顯示新聞標題，url 屬性會讓它變成可點擊連結
+						title: `📍 ${keyword}動態：${title}`,
 						url: link,
-						description: `**${title}**\n\n**✨ 新聞摘要：**\n${formattedSummary}`,
+						description: `**✨ 新聞摘要：**\n${formattedSummary}`,
 						color: 3447003,
 						fields: [
 							{ name: "日期", value: today, inline: true },
