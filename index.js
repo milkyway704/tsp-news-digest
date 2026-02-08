@@ -308,41 +308,43 @@ function decodeJsonText(s) {
 // =========================
 // Discord 發送邏輯
 // =========================
-async function sendToDiscord(summary, link, title, type) {
+async function sendToDiscord(summaryText, link, title, type) {
 	const configRaw = process.env.DISCORD_CONFIG;
 	if (!configRaw) return;
 
 	try {
 		const discordConfigs = JSON.parse(configRaw);
-		// 使用 Map 來儲存「哪些 Webhook 需要發送」，Key 是 Webhook URL，這能保證唯一性
 		const targetWebhooks = new Map();
 
+		// 檢查關鍵字命中
 		for (const config of discordConfigs) {
-			// 檢查這組配置中的關鍵字，只要有一個中，就記錄這個 Webhook
 			const matchedKeyword = config.keywords.find(
-				(k) => title.includes(k) || summary.title.includes(k),
+				(k) => title.includes(k) || summaryText.includes(k),
 			);
 
 			if (matchedKeyword) {
-				// 將該 Webhook 存入 Map，並記錄是哪個關鍵字觸發的（選第一個命中的即可）
 				if (!targetWebhooks.has(config.webhook)) {
 					targetWebhooks.set(config.webhook, matchedKeyword);
 				}
 			}
 		}
 
-		// 針對過濾後的每個唯一 Webhook 進行發送
-		for (const [webhook, keyword] of targetWebhooks) {
-			console.log(`🎯 命中關鍵字 [${keyword}]，準備發送到 Discord...`);
+		const today = new Date().toLocaleDateString("zh-TW");
 
+		// 針對命中目標發送
+		for (const [webhook, keyword] of targetWebhooks) {
 			const payload = {
 				embeds: [
 					{
 						title: `📍 關鍵字動態：${keyword}`,
-						description: `**${title}**\n\n${formatSummary(summary)}`,
-						url: link,
-						color: 5814783,
-						footer: { text: "CNA News Bot" },
+						url: link, // 標題嵌入超連結
+						description: `**${title}**\n\n**✨ 新聞摘要：**\n${summaryText}`,
+						color: 3447003, // 藍色邊條
+						fields: [
+							{ name: "日期", value: today, inline: true },
+							{ name: "新聞類別", value: type, inline: true },
+						],
+						footer: { text: "CNA News Bot • 自動追蹤中" },
 						timestamp: new Date().toISOString(),
 					},
 				],
