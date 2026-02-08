@@ -316,46 +316,59 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 		const discordConfigs = JSON.parse(configRaw);
 		const targetWebhooks = new Map();
 
-		// 1. 關鍵字比對範圍
+		// 1. 準備比對用的字串：優先使用 points 陣列內容
 		const summaryString =
-			typeof summaryObj === "object"
-				? summaryObj.points
-					? summaryObj.points.join(" ")
-					: Object.values(summaryObj).join(" ")
-				: String(summaryObj);
+			typeof summaryObj === "object" && Array.isArray(summaryObj.points)
+				? summaryObj.points.join(" ")
+				: typeof summaryObj === "object"
+					? Object.values(summaryObj).join(" ")
+					: String(summaryObj);
 
 		for (const config of discordConfigs) {
+			// 【新增：類別過濾邏輯】
+			// 如果設定了 targetTypes 且不為空，則檢查當前新聞類別是否在名單內
+			const isTargetType =
+				!config.targetTypes ||
+				config.targetTypes.length === 0 ||
+				config.targetTypes.includes(type);
+
+			if (!isTargetType) continue; // 類別不符，直接跳過這組設定
+
+			// 2. 關鍵字檢查 (標題 + 摘要字串 + 全文)
 			const matchedKeyword = config.keywords.find(
 				(k) =>
 					title.includes(k) ||
 					summaryString.includes(k) ||
 					(fullText && fullText.includes(k)),
 			);
-			if (matchedKeyword && !targetWebhooks.has(config.webhook)) {
-				targetWebhooks.set(config.webhook, matchedKeyword);
+
+			if (matchedKeyword) {
+				if (!targetWebhooks.has(config.webhook)) {
+					targetWebhooks.set(config.webhook, matchedKeyword);
+				}
 			}
 		}
 
+		if (targetWebhooks.size === 0) return; // 無命中則結束
+
 		const today = new Date().toLocaleDateString("zh-TW");
 
-		// 2. 【關鍵修正】精準提取摘要點，不再使用 Object.values
+		// 3. 【精準提取摘要點】確保只抓取 points 陣列中的三點
 		let points = [];
-		if (typeof summaryObj === "object") {
-			// 直接讀取 JSON 中的 points 陣列，這才是你要的三點
-			if (Array.isArray(summaryObj.points)) {
-				points = summaryObj.points;
-			} else {
-				// 防呆：如果 AI 沒給 points 陣列，才去抓取其他可能的欄位
-				points = Object.values(summaryObj).filter(
-					(v) =>
-						typeof v === "string" && v !== title && v.length < 300,
-				);
-			}
+		if (
+			typeof summaryObj === "object" &&
+			Array.isArray(summaryObj.points)
+		) {
+			points = summaryObj.points;
+		} else if (typeof summaryObj === "object") {
+			// 防呆：排除標題並過濾長文
+			points = Object.values(summaryObj).filter(
+				(v) => typeof v === "string" && v !== title && v.length < 300,
+			);
 		} else {
 			points = [summaryObj];
 		}
 
-		// 3. 重新編號並換行
 		const formattedSummary =
 			points.length > 0
 				? points
@@ -364,11 +377,12 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 						.join("\n")
 				: "無法讀取摘要內容";
 
+		// 4. 發送至 Discord
 		for (const [webhook, keyword] of targetWebhooks) {
 			const payload = {
 				embeds: [
 					{
-						title: `📍 ${keyword}動態：${title}`, // 這裡是新聞標題
+						title: `📍 ${keyword}動態：${title}`,
 						url: link,
 						description: `**✨ 新聞摘要：**\n${formattedSummary}`,
 						color: 3447003,
