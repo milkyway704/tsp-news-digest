@@ -316,12 +316,12 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 		const discordConfigs = JSON.parse(configRaw);
 		const targetWebhooks = new Map();
 
-		// 1. 提取所有內容並轉為字串進行關鍵字比對
+		// 1. 關鍵字比對範圍
 		const summaryString =
 			typeof summaryObj === "object"
-				? Object.values(summaryObj)
-						.filter((v) => v)
-						.join(" ")
+				? summaryObj.points
+					? summaryObj.points.join(" ")
+					: Object.values(summaryObj).join(" ")
 				: String(summaryObj);
 
 		for (const config of discordConfigs) {
@@ -331,44 +331,35 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 					summaryString.includes(k) ||
 					(fullText && fullText.includes(k)),
 			);
-
-			if (matchedKeyword) {
-				if (!targetWebhooks.has(config.webhook)) {
-					targetWebhooks.set(config.webhook, matchedKeyword);
-				}
+			if (matchedKeyword && !targetWebhooks.has(config.webhook)) {
+				targetWebhooks.set(config.webhook, matchedKeyword);
 			}
 		}
 
 		const today = new Date().toLocaleDateString("zh-TW");
 
-		// 2. 【核心排版修正】精準拆分摘要點
+		// 2. 【關鍵修正】精準提取摘要點，不再使用 Object.values
 		let points = [];
 		if (typeof summaryObj === "object") {
-			// 取得所有數值，過濾掉與新聞大標題相同的內容
-			const rawValues = Object.values(summaryObj).filter(
-				(v) => v && v !== title,
-			);
-
-			rawValues.forEach((val) => {
-				if (typeof val === "string") {
-					// 根據「1. 」「2. 」「3. 」或「，」等常見分隔符號來拆分
-					// 使用正規表達式處理各種可能的數字標點組合
-					const splitVals = val
-						.split(/(?:\r\n|\r|\n|\d+\.\s*|[，,])/)
-						.map((s) => s.trim())
-						.filter((s) => s.length > 5); // 過濾掉太短的片段
-					points.push(...splitVals);
-				} else {
-					points.push(val);
-				}
-			});
+			// 直接讀取 JSON 中的 points 陣列，這才是你要的三點
+			if (Array.isArray(summaryObj.points)) {
+				points = summaryObj.points;
+			} else {
+				// 防呆：如果 AI 沒給 points 陣列，才去抓取其他可能的欄位
+				points = Object.values(summaryObj).filter(
+					(v) =>
+						typeof v === "string" && v !== title && v.length < 300,
+				);
+			}
+		} else {
+			points = [summaryObj];
 		}
 
-		// 3. 重新編號並換行 (確保每一點都獨立一行)
+		// 3. 重新編號並換行
 		const formattedSummary =
 			points.length > 0
 				? points
-						.slice(0, 5)
+						.slice(0, 3)
 						.map((p, i) => `${i + 1}. ${p}`)
 						.join("\n")
 				: "無法讀取摘要內容";
@@ -377,7 +368,7 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 			const payload = {
 				embeds: [
 					{
-						title: `📍 ${keyword}動態：${title}`,
+						title: `📍 ${keyword}動態：${title}`, // 這裡是新聞標題
 						url: link,
 						description: `**✨ 新聞摘要：**\n${formattedSummary}`,
 						color: 3447003,
