@@ -130,6 +130,16 @@ async function main() {
 					fullText || "(無法擷取全文)",
 				]);
 
+				// 如果摘要成功，嘗試過濾並發送 Discord
+				if (summaryResult.status === "success") {
+					await sendToDiscord(
+						summaryResult.summary,
+						link,
+						title,
+						cfg.type,
+					);
+				}
+
 				existingLinks.add(link);
 
 				// 基礎延遲加上小抖動，防止規律性觸發限制
@@ -293,6 +303,60 @@ function decodeJsonText(s) {
 		.replace(/\\u([\dA-Fa-f]{4})/g, (_, h) =>
 			String.fromCharCode(parseInt(h, 16)),
 		);
+}
+
+// =========================
+// Discord 發送邏輯
+// =========================
+async function sendToDiscord(summary, link, title, type) {
+	const configRaw = process.env.DISCORD_CONFIG;
+	if (!configRaw) return;
+
+	try {
+		const discordConfigs = JSON.parse(configRaw);
+
+		for (const config of discordConfigs) {
+			// 檢查 keywords 陣列中是否「有任何一個」出現在標題或摘要標題中
+			const matchedKeyword = config.keywords.find(
+				(k) => title.includes(k) || summary.title.includes(k),
+			);
+
+			if (matchedKeyword) {
+				console.log(
+					`🎯 命中關鍵字 [${matchedKeyword}]，準備發送到頻道...`,
+				);
+
+				const payload = {
+					embeds: [
+						{
+							title: `📍 關鍵字動態：${matchedKeyword}`,
+							description: `**${title}**\n\n${formatSummary(summary)}`,
+							url: link,
+							color: 5814783,
+							fields: [
+								{
+									name: "設定來源",
+									value: config.keywords.join(", "),
+									inline: true,
+								},
+								{ name: "新聞類別", value: type, inline: true },
+							],
+							footer: { text: "CNA News Bot" },
+							timestamp: new Date().toISOString(),
+						},
+					],
+				};
+
+				await fetch(config.webhook, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(payload),
+				});
+			}
+		}
+	} catch (e) {
+		console.error("Discord 傳送失敗:", e.message);
+	}
 }
 
 main().catch(console.error);

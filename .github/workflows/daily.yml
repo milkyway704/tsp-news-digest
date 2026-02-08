@@ -29,3 +29,4 @@ jobs:
                   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
                   SHEET_ID: ${{ secrets.SHEET_ID }}
                   GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+                  DISCORD_CONFIG: ${{ secrets.DISCORD_CONFIG }}
