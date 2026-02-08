@@ -316,7 +316,7 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 		const discordConfigs = JSON.parse(configRaw);
 		const targetWebhooks = new Map();
 
-		// 1. 將物件所有內容串起來比對
+		// 1. 提取所有內容並轉為字串進行關鍵字比對
 		const summaryString =
 			typeof summaryObj === "object"
 				? Object.values(summaryObj)
@@ -341,41 +341,42 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 
 		const today = new Date().toLocaleDateString("zh-TW");
 
-		// 2. 【核心修正】處理摘要排版：拆分被逗號連在一起的內容
+		// 2. 【核心排版修正】精準拆分摘要點
 		let points = [];
 		if (typeof summaryObj === "object") {
-			// 先抓出所有值，過濾掉與新聞大標題相同的內容
+			// 取得所有數值，過濾掉與新聞大標題相同的內容
 			const rawValues = Object.values(summaryObj).filter(
 				(v) => v && v !== title,
 			);
 
-			// 處理如果 AI 回傳的是帶有逗號的長字串 (如你的截圖狀況)
 			rawValues.forEach((val) => {
-				if (typeof val === "string" && val.includes("，")) {
-					// 根據常見分隔符號拆分，避免一長串擠在一起
+				if (typeof val === "string") {
+					// 根據「1. 」「2. 」「3. 」或「，」等常見分隔符號來拆分
+					// 使用正規表達式處理各種可能的數字標點組合
 					const splitVals = val
-						.split(/[，,]\s*/)
-						.filter((s) => s.length > 5);
+						.split(/(?:\r\n|\r|\n|\d+\.\s*|[，,])/)
+						.map((s) => s.trim())
+						.filter((s) => s.length > 5); // 過濾掉太短的片段
 					points.push(...splitVals);
 				} else {
 					points.push(val);
 				}
 			});
-		} else {
-			points = [summaryObj];
 		}
 
-		// 限制顯示前 3 到 5 點，並加上編號與換行
-		const formattedSummary = points
-			.slice(0, 5)
-			.map((p, i) => `${i + 1}. ${p}`)
-			.join("\n");
+		// 3. 重新編號並換行 (確保每一點都獨立一行)
+		const formattedSummary =
+			points.length > 0
+				? points
+						.slice(0, 5)
+						.map((p, i) => `${i + 1}. ${p}`)
+						.join("\n")
+				: "無法讀取摘要內容";
 
 		for (const [webhook, keyword] of targetWebhooks) {
 			const payload = {
 				embeds: [
 					{
-						// 修正：標題直接顯示「地區動態 + 新聞標題」
 						title: `📍 ${keyword}動態：${title}`,
 						url: link,
 						description: `**✨ 新聞摘要：**\n${formattedSummary}`,
