@@ -314,45 +314,45 @@ async function sendToDiscord(summary, link, title, type) {
 
 	try {
 		const discordConfigs = JSON.parse(configRaw);
+		// 使用 Map 來儲存「哪些 Webhook 需要發送」，Key 是 Webhook URL，這能保證唯一性
+		const targetWebhooks = new Map();
 
 		for (const config of discordConfigs) {
-			// 檢查 keywords 陣列中是否「有任何一個」出現在標題或摘要標題中
+			// 檢查這組配置中的關鍵字，只要有一個中，就記錄這個 Webhook
 			const matchedKeyword = config.keywords.find(
 				(k) => title.includes(k) || summary.title.includes(k),
 			);
 
 			if (matchedKeyword) {
-				console.log(
-					`🎯 命中關鍵字 [${matchedKeyword}]，準備發送到頻道...`,
-				);
-
-				const payload = {
-					embeds: [
-						{
-							title: `📍 關鍵字動態：${matchedKeyword}`,
-							description: `**${title}**\n\n${formatSummary(summary)}`,
-							url: link,
-							color: 5814783,
-							fields: [
-								{
-									name: "設定來源",
-									value: config.keywords.join(", "),
-									inline: true,
-								},
-								{ name: "新聞類別", value: type, inline: true },
-							],
-							footer: { text: "CNA News Bot" },
-							timestamp: new Date().toISOString(),
-						},
-					],
-				};
-
-				await fetch(config.webhook, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(payload),
-				});
+				// 將該 Webhook 存入 Map，並記錄是哪個關鍵字觸發的（選第一個命中的即可）
+				if (!targetWebhooks.has(config.webhook)) {
+					targetWebhooks.set(config.webhook, matchedKeyword);
+				}
 			}
+		}
+
+		// 針對過濾後的每個唯一 Webhook 進行發送
+		for (const [webhook, keyword] of targetWebhooks) {
+			console.log(`🎯 命中關鍵字 [${keyword}]，準備發送到 Discord...`);
+
+			const payload = {
+				embeds: [
+					{
+						title: `📍 關鍵字動態：${keyword}`,
+						description: `**${title}**\n\n${formatSummary(summary)}`,
+						url: link,
+						color: 5814783,
+						footer: { text: "CNA News Bot" },
+						timestamp: new Date().toISOString(),
+					},
+				],
+			};
+
+			await fetch(webhook, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload),
+			});
 		}
 	} catch (e) {
 		console.error("Discord 傳送失敗:", e.message);
