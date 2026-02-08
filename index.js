@@ -308,7 +308,7 @@ function decodeJsonText(s) {
 // =========================
 // Discord 發送邏輯
 // =========================
-async function sendToDiscord(summaryText, link, title, type) {
+async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 	const configRaw = process.env.DISCORD_CONFIG;
 	if (!configRaw) return;
 
@@ -316,10 +316,21 @@ async function sendToDiscord(summaryText, link, title, type) {
 		const discordConfigs = JSON.parse(configRaw);
 		const targetWebhooks = new Map();
 
-		// 檢查關鍵字命中
+		// 【重要修正】將物件內容轉為字串以利比對
+		// 假設 summaryObj 結構是 { title: "...", point1: "...", ... }
+		// 我們把所有內容串成一個大字串
+		const summaryString =
+			typeof summaryObj === "object"
+				? Object.values(summaryObj).join(" ")
+				: String(summaryObj);
+
 		for (const config of discordConfigs) {
+			// 現在這裡就不會報錯了，因為 summaryString 是字串
 			const matchedKeyword = config.keywords.find(
-				(k) => title.includes(k) || summaryText.includes(k),
+				(k) =>
+					title.includes(k) ||
+					summaryString.includes(k) ||
+					(fullText && fullText.includes(k)),
 			);
 
 			if (matchedKeyword) {
@@ -331,20 +342,25 @@ async function sendToDiscord(summaryText, link, title, type) {
 
 		const today = new Date().toLocaleDateString("zh-TW");
 
-		// 針對命中目標發送
 		for (const [webhook, keyword] of targetWebhooks) {
+			// 這裡傳送給 Discord 的內容，要把物件轉回你原本顯示的格式
+			const formattedSummary =
+				typeof summaryObj === "object"
+					? `${summaryObj.title}\n1. ${summaryObj.point1}\n2. ${summaryObj.point2}\n3. ${summaryObj.point3}`
+					: summaryObj;
+
 			const payload = {
 				embeds: [
 					{
 						title: `📍 關鍵字動態：${keyword}`,
-						url: link, // 標題嵌入超連結
-						description: `**${title}**\n\n**✨ 新聞摘要：**\n${summaryText}`,
-						color: 3447003, // 藍色邊條
+						url: link,
+						description: `**${title}**\n\n**✨ 新聞摘要：**\n${formattedSummary}`,
+						color: 3447003,
 						fields: [
 							{ name: "日期", value: today, inline: true },
 							{ name: "新聞類別", value: type, inline: true },
 						],
-						footer: { text: "CNA News Bot • 自動追蹤中" },
+						footer: { text: "CNA News Bot" },
 						timestamp: new Date().toISOString(),
 					},
 				],
