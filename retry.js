@@ -1,23 +1,14 @@
 import { google } from "googleapis";
 import fetch from "node-fetch";
 
-// =========================
-// 設定
-// =========================
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = "每日新聞";
-
 const PRIMARY_MODEL = "gemini-2.5-flash-lite";
 const BACKUP_MODEL = "gemini-2.5-flash";
-
 const RETRY_TARGET_TEXT = "AI摘要失敗";
 const MAX_RETRY_PER_RUN = 20;
-const BASE_SLEEP_MS = 8000;
 
-// =========================
-// 工具函式
-// =========================
 async function getSheetClient() {
 	const auth = new google.auth.GoogleAuth({
 		credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
@@ -26,23 +17,9 @@ async function getSheetClient() {
 	return google.sheets({ version: "v4", auth });
 }
 
-async function smartFetch(url) {
-	const headers = {
-		"User-Agent":
-			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-		Referer: "https://www.google.com/",
-	};
-	return await fetch(url, { headers });
-}
-
-// =========================
-// 主流程
-// =========================
 async function retryFailedSummaries() {
-	console.log("開始執行深夜重試任務 (強化版)...");
+	console.log("開始執行深夜重試任務...");
 	const sheets = await getSheetClient();
-
 	const res = await sheets.spreadsheets.values.get({
 		spreadsheetId: SHEET_ID,
 		range: `${SHEET_NAME}!A:G`,
@@ -52,64 +29,58 @@ async function retryFailedSummaries() {
 	if (!rows || rows.length <= 1) return;
 
 	let retriedCount = 0;
-
 	for (let i = 1; i < rows.length; i++) {
 		if (retriedCount >= MAX_RETRY_PER_RUN) break;
 
-		// 索引：1:來源, 2:類別, 3:標題, 4:網址, 5:摘要, 6:全文
-		const sourceName = rows[i][1] || "";
-		const newsType = rows[i][2] || "";
-		const title = rows[i][3] || "";
-		const link = rows[i][4] || "";
-		const summaryCell = rows[i][5] || "";
-		const fullText = rows[i][6] || "";
+		const [date, source, type, title, link, summary, fullText] = [
+			rows[i][0],
+			rows[i][1],
+			rows[i][2],
+			rows[i][3],
+			rows[i][4],
+			rows[i][5],
+			rows[i][6],
+		];
 
-		if (summaryCell.includes(RETRY_TARGET_TEXT) && fullText.length > 50) {
-			console.log(`\n--- 重新摘要: [${sourceName}] ${title} ---`);
-
-			let finalResult = await callGemini(fullText, PRIMARY_MODEL);
-
-			if (finalResult.status === "429_limit") {
-				console.log(`觸發 429，冷卻 20 秒...`);
+		if (
+			summary &&
+			summary.includes(RETRY_TARGET_TEXT) &&
+			fullText &&
+			fullText.length > 50
+		) {
+			console.log(`\n重新處理: ${title}`);
+			let result = await callGemini(fullText, PRIMARY_MODEL);
+			if (result.status === "429_limit") {
 				await new Promise((r) => setTimeout(r, 20000));
-				finalResult = await callGemini(fullText, BACKUP_MODEL);
+				result = await callGemini(fullText, BACKUP_MODEL);
 			}
 
-			if (finalResult.status === "success") {
-				const formattedSummary = formatSummary(finalResult.summary);
+			if (result.status === "success") {
+				const formatted = `${result.summary.title}\n1. ${result.summary.points[0]}\n2. ${result.summary.points[1]}\n3. ${result.summary.points[2]}`;
 
-				// 更新 F 欄 (摘要)
+				// 【修正】使用 USER_ENTERED，確保日期欄位不會被重新加回單引號
 				await sheets.spreadsheets.values.update({
 					spreadsheetId: SHEET_ID,
 					range: `${SHEET_NAME}!F${i + 1}`,
-					valueInputOption: "RAW",
-					requestBody: { values: [[formattedSummary]] },
+					valueInputOption: "USER_ENTERED",
+					requestBody: { values: [[formatted]] },
 				});
 
-				// 補發 Discord
 				await sendToDiscord(
-					finalResult.summary,
+					result.summary,
 					link,
 					title,
-					newsType,
+					type,
 					fullText,
 				);
-				console.log(`✅ 重試成功並已更新資料。`);
 				retriedCount++;
-			} else {
-				console.log(`❌ 最終重試失敗: ${finalResult.status}`);
 			}
-
-			await new Promise((r) =>
-				setTimeout(r, BASE_SLEEP_MS + Math.random() * 3000),
-			);
 		}
 	}
-	console.log(`\n重試任務結束。`);
 }
 
 async function callGemini(text, model) {
-	const prompt = `你是專業的新聞編輯。請摘要以下內容，回傳純 JSON：\n{ "title": "標題", "points": ["點1", "點2", "點3"] }\n內容：\n${text}`;
+	const prompt = `你是專業的新聞編輯。請摘要以下內容，回傳純 JSON：{ "title": "標題", "points": ["點1", "點2", "點3"] }\n內容：\n${text}`;
 	try {
 		const res = await fetch(
 			`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
@@ -131,10 +102,6 @@ async function callGemini(text, model) {
 	}
 }
 
-function formatSummary(s) {
-	return `${s.title}\n1. ${s.points[0] || ""}\n2. ${s.points[1] || ""}\n3. ${s.points[2] || ""}`;
-}
-
 async function sendToDiscord(summaryObj, link, title, type, fullText) {
 	const configRaw = process.env.DISCORD_CONFIG;
 	if (!configRaw) return;
@@ -143,8 +110,7 @@ async function sendToDiscord(summaryObj, link, title, type, fullText) {
 		const points = summaryObj.points || [];
 		for (const config of discordConfigs) {
 			if (
-				config.targetTypes &&
-				config.targetTypes.length > 0 &&
+				config.targetTypes?.length > 0 &&
 				!config.targetTypes.includes(type)
 			)
 				continue;

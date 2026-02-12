@@ -90,31 +90,50 @@ async function getExistingLinks(sheets) {
 	}
 }
 
-async function appendRow(sheets, row) {
-	await sheets.spreadsheets.values.append({
+// 【修正重點：改為插入在頂部，並使用 USER_ENTERED】
+async function insertRowAtTop(sheets, row) {
+	// 1. 先在第 2 列位置插入空白行
+	await sheets.spreadsheets.batchUpdate({
 		spreadsheetId: SHEET_ID,
-		range: `${SHEET_NAME}!A:G`,
-		valueInputOption: "RAW",
+		requestBody: {
+			requests: [
+				{
+					insertDimension: {
+						range: {
+							sheetId: 0, // 如果你的 gid 不是 0，請修改此處
+							dimension: "ROWS",
+							startIndex: 1,
+							endIndex: 2,
+						},
+						inheritFromBefore: false,
+					},
+				},
+			],
+		},
+	});
+
+	// 2. 寫入資料，使用 USER_ENTERED 移除日期前的單引號
+	await sheets.spreadsheets.values.update({
+		spreadsheetId: SHEET_ID,
+		range: `${SHEET_NAME}!A2:G2`,
+		valueInputOption: "USER_ENTERED",
 		requestBody: { values: [row] },
 	});
 }
 
-// 統一的 Fetch 封裝，增加成功率
 async function smartFetch(url) {
 	const headers = {
 		"User-Agent":
 			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
 		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
 		"Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-		"Cache-Control": "no-cache",
-		Pragma: "no-cache",
 		Referer: "https://www.google.com/",
 	};
 	return await fetch(url, { headers });
 }
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (穩定加固版)...");
+	console.log("開始執行新聞爬取任務 (日期格式修正版)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 	const today = new Date(new Date().getTime() + 8 * 3600000)
@@ -128,19 +147,13 @@ async function main() {
 			let rssResponse = await smartFetch(cfg.url);
 			let rssText = await rssResponse.text();
 
-			// 針對 CDNS 403 的特別處理：嘗試備用路徑
 			if (cfg.source === "CDNS" && rssResponse.status === 403) {
-				console.log("⚠️ 偵測到 403，嘗試切換備用路徑...");
 				rssResponse = await smartFetch("https://www.cdns.com.tw/feed/");
 				rssText = await rssResponse.text();
 			}
 
-			if (!rssText.includes("<rss") && !rssText.includes("<channel")) {
-				console.warn(
-					`⚠️ [${cfg.source}] 格式錯誤，開頭：${rssText.substring(0, 50)}`,
-				);
+			if (!rssText.includes("<rss") && !rssText.includes("<channel"))
 				continue;
-			}
 
 			const parsed = await parseStringPromise(rssText);
 			const channel =
@@ -155,19 +168,13 @@ async function main() {
 
 			for (const item of items) {
 				const link = item.link[0];
-				const title = item.title[0]; // 提早定義，避免 initialization 錯誤
-
+				const title = item.title[0];
 				if (!link || existingLinks.has(link)) continue;
 
 				const pubDate = new Date(item.pubDate[0])
 					.toISOString()
 					.slice(0, 10);
-
-				// 日期過濾
-				if (pubDate !== today) {
-					//console.log(`跳過日期不符: ${title} (${pubDate})`);
-					continue;
-				}
+				if (pubDate !== today) continue;
 
 				if (cfg.source === "CDNS") {
 					const categories = item.category
@@ -193,7 +200,8 @@ async function main() {
 				const displayName =
 					cfg.source === "CDNS" ? "中華日報" : "中央社";
 
-				await appendRow(sheets, [
+				// 改用 insertRowAtTop 插入最新資料到頂部
+				await insertRowAtTop(sheets, [
 					today,
 					displayName,
 					cfg.type,
@@ -202,6 +210,7 @@ async function main() {
 					summaryText,
 					fullText || "(無法擷取)",
 				]);
+
 				if (summaryResult.status === "success")
 					await sendToDiscord(
 						summaryResult.summary,
@@ -223,9 +232,7 @@ async function main() {
 	console.log("\n任務完成");
 }
 
-// =========================
-// 以下邏輯 (summarizeStepwise, fetchArticleText, sendToDiscord) 保持與前版一致，但 fetchArticleText 內部改用 smartFetch
-// =========================
+// ... (省略後續 summarizeStepwise, callGemini, fetchArticleText, sendToDiscord 邏輯，皆維持與前版一致) ...
 
 async function summarizeStepwise(text) {
 	let result = await callGemini(text, PRIMARY_MODEL);
