@@ -133,8 +133,27 @@ async function main() {
 		try {
 			const rssResponse = await fetch(cfg.url);
 			const rssText = await rssResponse.text();
+
+			// 加入檢查：如果回傳不是 XML 格式就跳過
+			if (!rssText.includes("<rss")) {
+				console.warn(`[${cfg.source}] 回傳內容非標準 RSS，跳過處理。`);
+				continue;
+			}
+
 			const parsed = await parseStringPromise(rssText);
-			const items = parsed.rss.channel[0].item || [];
+
+			// 使用安全導引與多重結構相容
+			const channel = parsed.rss
+				? parsed.rss.channel[0]
+				: parsed.feed
+					? parsed.feed
+					: null;
+			if (!channel) {
+				console.error(`[${cfg.source}] 無法解析 RSS Channel 結構`);
+				continue;
+			}
+			// 支援 RSS (item) 與 Atom (entry) 格式
+			const items = channel.item || channel.entry || [];
 
 			for (const item of items) {
 				const link = item.link[0];
