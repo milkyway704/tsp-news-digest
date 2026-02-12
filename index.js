@@ -11,30 +11,74 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = "每日新聞";
 
-// 模型定義 (升級至 2.5 系列)
 const PRIMARY_MODEL = "gemini-2.5-flash-lite";
 const BACKUP_MODEL = "gemini-2.5-flash";
 
-const TIMEZONE = "Asia/Taipei";
 const MAX_FULLTEXT_LENGTH = 20000;
-const SLEEP_MS = 5000; // 基礎間隔維持在 5 秒
+const SLEEP_MS = 5000;
 
 // =========================
-// CNA RSS 配置
+// 新聞來源配置 (整合中央社與中華日報)
 // =========================
 
-const CNA_RSS_CONFIG = [
-	{ type: "政治", url: "https://feeds.feedburner.com/rsscna/politics" },
-	{ type: "國際", url: "https://feeds.feedburner.com/rsscna/intworld" },
-	{ type: "兩岸", url: "https://feeds.feedburner.com/rsscna/mainland" },
-	{ type: "產經證券", url: "https://feeds.feedburner.com/rsscna/finance" },
-	{ type: "科技", url: "https://feeds.feedburner.com/rsscna/technology" },
-	{ type: "生活", url: "https://feeds.feedburner.com/rsscna/lifehealth" },
-	{ type: "社會", url: "https://feeds.feedburner.com/rsscna/social" },
-	{ type: "地方", url: "https://feeds.feedburner.com/rsscna/local" },
-	{ type: "文化", url: "https://feeds.feedburner.com/rsscna/culture" },
-	{ type: "運動", url: "https://feeds.feedburner.com/rsscna/sport" },
-	{ type: "娛樂", url: "https://feeds.feedburner.com/rsscna/stars" },
+const NEWS_SOURCES = [
+	{
+		source: "CNA",
+		type: "政治",
+		url: "https://feeds.feedburner.com/rsscna/politics",
+	},
+	{
+		source: "CNA",
+		type: "國際",
+		url: "https://feeds.feedburner.com/rsscna/intworld",
+	},
+	{
+		source: "CNA",
+		type: "兩岸",
+		url: "https://feeds.feedburner.com/rsscna/mainland",
+	},
+	{
+		source: "CNA",
+		type: "產經證券",
+		url: "https://feeds.feedburner.com/rsscna/finance",
+	},
+	{
+		source: "CNA",
+		type: "科技",
+		url: "https://feeds.feedburner.com/rsscna/technology",
+	},
+	{
+		source: "CNA",
+		type: "生活",
+		url: "https://feeds.feedburner.com/rsscna/lifehealth",
+	},
+	{
+		source: "CNA",
+		type: "社會",
+		url: "https://feeds.feedburner.com/rsscna/social",
+	},
+	{
+		source: "CNA",
+		type: "地方",
+		url: "https://feeds.feedburner.com/rsscna/local",
+	},
+	{
+		source: "CNA",
+		type: "文化",
+		url: "https://feeds.feedburner.com/rsscna/culture",
+	},
+	{
+		source: "CNA",
+		type: "運動",
+		url: "https://feeds.feedburner.com/rsscna/sport",
+	},
+	{
+		source: "CNA",
+		type: "娛樂",
+		url: "https://feeds.feedburner.com/rsscna/stars",
+	},
+	// 中華日報：維持全站 RSS，由程式過濾分類
+	{ source: "CDNS", type: "台南", url: "https://www.cdns.com.tw/feed" },
 ];
 
 // =========================
@@ -57,7 +101,6 @@ async function getExistingLinks(sheets) {
 		});
 		return new Set((res.data.values || []).flat());
 	} catch (e) {
-		console.log("讀取現有連結失敗或工作表為空");
 		return new Set();
 	}
 }
@@ -76,7 +119,7 @@ async function appendRow(sheets, row) {
 // =========================
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (Gemini 2.5 雙軌模式)...");
+	console.log("開始執行新聞爬取任務 (中央社 + 中華日報)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
@@ -85,8 +128,8 @@ async function main() {
 		.slice(0, 10);
 	console.log(`目標日期: ${today}`);
 
-	for (const cfg of CNA_RSS_CONFIG) {
-		console.log(`正在抓取 [${cfg.type}] 類別...`);
+	for (const cfg of NEWS_SOURCES) {
+		console.log(`正在抓取 [${cfg.source} - ${cfg.type}]...`);
 		try {
 			const rssResponse = await fetch(cfg.url);
 			const rssText = await rssResponse.text();
@@ -102,16 +145,27 @@ async function main() {
 					.slice(0, 10);
 				if (pubDate !== today) continue;
 
+				// 【功能加強：中華日報分類過濾】
+				if (cfg.source === "CDNS") {
+					const categories = item.category
+						? item.category.map((c) =>
+								typeof c === "string" ? c : c._ || "",
+							)
+						: [];
+					const isTainanNews = categories.some((cat) =>
+						cat.includes("台南"),
+					);
+					if (!isTainanNews) continue;
+				}
+
 				const title = item.title[0];
 				console.log(`\n處理中: ${title}`);
 
-				const fullText = await fetchCnaArticleText(link);
-
+				const fullText = await fetchArticleText(link);
 				let summaryResult;
-				if (!fullText || !isLikelyCnaArticleText(fullText)) {
+				if (!fullText || !isLikelyChineseText(fullText)) {
 					summaryResult = { status: "no_text_or_invalid" };
 				} else {
-					// 使用新的階梯式摘要邏輯
 					summaryResult = await summarizeStepwise(fullText);
 				}
 
@@ -120,9 +174,13 @@ async function main() {
 						? formatSummary(summaryResult.summary)
 						: `AI摘要失敗[${summaryResult.status}]，請手動處理`;
 
+				// 【需求修正：顯示名稱轉換】
+				const displayName =
+					cfg.source === "CDNS" ? "中華日報" : "中央社";
+
 				await appendRow(sheets, [
 					today,
-					"中央社",
+					displayName,
 					cfg.type,
 					title,
 					link,
@@ -130,55 +188,47 @@ async function main() {
 					fullText || "(無法擷取全文)",
 				]);
 
-				// 如果摘要成功，嘗試過濾並發送 Discord
 				if (summaryResult.status === "success") {
 					await sendToDiscord(
 						summaryResult.summary,
 						link,
 						title,
 						cfg.type,
+						fullText,
 					);
 				}
 
 				existingLinks.add(link);
-
-				// 基礎延遲加上小抖動，防止規律性觸發限制
 				const jitter = Math.random() * 2000;
 				await sleep(SLEEP_MS + jitter);
 			}
 		} catch (err) {
-			console.error(`處理類別 ${cfg.type} 時發生錯誤:`, err.message);
+			console.error(
+				`處理 ${cfg.source} ${cfg.type} 時發生錯誤:`,
+				err.message,
+			);
 		}
 	}
 	console.log("\n任務完成");
 }
 
 // =========================
-// 摘要核心邏輯 (階梯式)
+// 摘要邏輯
 // =========================
 
 async function summarizeStepwise(text) {
-	// 階段一：嘗試使用 Lite 模型
-	console.log(`[嘗試 1] 使用 ${PRIMARY_MODEL}...`);
 	let result = await callGemini(text, PRIMARY_MODEL);
-
-	// 階段二：如果 429，冷卻 20 秒後嘗試標準 Flash 模型
 	if (result.status === "429_limit") {
-		console.warn(`⚠️ 觸發 429 限制，進入 20 秒強制冷卻...`);
 		await sleep(20000);
-		console.log(`[嘗試 2] 切換至備用模型 ${BACKUP_MODEL}...`);
 		result = await callGemini(text, BACKUP_MODEL);
 	}
-
 	return result;
 }
 
 async function callGemini(text, model) {
 	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明等文字。
-  
 【格式】：必須回傳純 JSON，不要 Markdown：
 { "title": "標題", "points": ["點1", "點2", "點3"] }
-
 內容：\n${text}`;
 
 	try {
@@ -192,10 +242,8 @@ async function callGemini(text, model) {
 				}),
 			},
 		);
-
 		if (res.status === 429) return { status: "429_limit" };
 		if (!res.ok) return { status: `HTTP_${res.status}` };
-
 		const json = await res.json();
 		let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
 		raw = raw.replace(/```json|```/g, "").trim();
@@ -230,7 +278,16 @@ function cleanText(text) {
 		.trim();
 }
 
-async function fetchCnaArticleText(url) {
+function decodeJsonText(s) {
+	return s
+		.replace(/\\"/g, '"')
+		.replace(/\\n/g, "\n")
+		.replace(/\\u([\dA-Fa-f]{4})/g, (_, h) =>
+			String.fromCharCode(parseInt(h, 16)),
+		);
+}
+
+async function fetchArticleText(url) {
 	try {
 		const res = await fetch(url, {
 			headers: {
@@ -241,16 +298,15 @@ async function fetchCnaArticleText(url) {
 		if (!res.ok) return "";
 		const html = await res.text();
 		const $ = cheerio.load(html);
-
 		let rawText = "";
 
-		// 1. 標準選取器 (優先順序：paragraph > article-body > article-content)
+		// 【保留並整合】多重選取器 (中央社 paragraph + 中華日報 entry-content)
 		const selectors = [
 			"div.paragraph",
+			"div.entry-content",
 			"div.article-body",
 			"div.article-content",
 		];
-
 		for (const sel of selectors) {
 			const found = $(sel);
 			if (found.length > 0) {
@@ -261,53 +317,38 @@ async function fetchCnaArticleText(url) {
 			}
 		}
 
-		// 2. 如果還是沒抓到，嘗試 JSON-LD (articleBody)
+		// 【保留】JSON-LD 抓取邏輯
 		if (!rawText.trim()) {
 			const m = html.match(/"articleBody":"([\s\S]*?)"/i);
 			if (m) rawText = decodeJsonText(m[1]);
 		}
 
-		// 3. 【核心補強】針對影片新聞頁面 (fallback 到所有 <p> 標籤)
-		// 許多影片頁面內容分散在多個 <p> 標籤中，沒有包裹在上述 div 內
+		// 【保留】影片新聞處理邏輯
 		if (!rawText.trim()) {
-			const isVideoPage = /<video|iframe|data-video/i.test(html);
-			if (isVideoPage) {
-				console.log("偵測為影片新聞頁面，使用替代抓取邏輯...");
+			if (/<video|iframe|data-video/i.test(html)) {
 				$("p").each((_, el) => {
 					const txt = $(el).text().trim();
-					// 排除過短或雜訊標籤
-					if (txt.length > 10) {
-						rawText += txt + "\n";
-					}
+					if (txt.length > 10) rawText += txt + "\n";
 				});
 			}
 		}
 
 		return cleanText(rawText).substring(0, MAX_FULLTEXT_LENGTH);
 	} catch (e) {
-		console.error(`擷取全文失敗 (${url}):`, e.message);
 		return "";
 	}
 }
 
-function isLikelyCnaArticleText(text) {
+function isLikelyChineseText(text) {
 	if (!text || text.length < 50) return false;
 	const chineseChars = text.match(/[\u4e00-\u9fff]/g) || [];
 	return chineseChars.length / text.length > 0.25;
 }
 
-function decodeJsonText(s) {
-	return s
-		.replace(/\\"/g, '"')
-		.replace(/\\n/g, "\n")
-		.replace(/\\u([\dA-Fa-f]{4})/g, (_, h) =>
-			String.fromCharCode(parseInt(h, 16)),
-		);
-}
-
 // =========================
 // Discord 發送邏輯
 // =========================
+
 async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 	const configRaw = process.env.DISCORD_CONFIG;
 	if (!configRaw) return;
@@ -316,7 +357,6 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 		const discordConfigs = JSON.parse(configRaw);
 		const targetWebhooks = new Map();
 
-		// 1. 準備比對用的字串：優先使用 points 陣列內容
 		const summaryString =
 			typeof summaryObj === "object" && Array.isArray(summaryObj.points)
 				? summaryObj.points.join(" ")
@@ -325,16 +365,14 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 					: String(summaryObj);
 
 		for (const config of discordConfigs) {
-			// 【新增：類別過濾邏輯】
-			// 如果設定了 targetTypes 且不為空，則檢查當前新聞類別是否在名單內
+			// 類別過濾
 			const isTargetType =
 				!config.targetTypes ||
 				config.targetTypes.length === 0 ||
 				config.targetTypes.includes(type);
+			if (!isTargetType) continue;
 
-			if (!isTargetType) continue; // 類別不符，直接跳過這組設定
-
-			// 2. 關鍵字檢查 (標題 + 摘要字串 + 全文)
+			// 關鍵字比對
 			const matchedKeyword = config.keywords.find(
 				(k) =>
 					title.includes(k) ||
@@ -342,42 +380,23 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 					(fullText && fullText.includes(k)),
 			);
 
-			if (matchedKeyword) {
-				if (!targetWebhooks.has(config.webhook)) {
-					targetWebhooks.set(config.webhook, matchedKeyword);
-				}
+			if (matchedKeyword && !targetWebhooks.has(config.webhook)) {
+				targetWebhooks.set(config.webhook, matchedKeyword);
 			}
 		}
 
-		if (targetWebhooks.size === 0) return; // 無命中則結束
+		if (targetWebhooks.size === 0) return;
 
+		let points =
+			typeof summaryObj === "object" && Array.isArray(summaryObj.points)
+				? summaryObj.points
+				: [summaryObj];
+		const formattedSummary = points
+			.slice(0, 3)
+			.map((p, i) => `${i + 1}. ${p}`)
+			.join("\n");
 		const today = new Date().toLocaleDateString("zh-TW");
 
-		// 3. 【精準提取摘要點】確保只抓取 points 陣列中的三點
-		let points = [];
-		if (
-			typeof summaryObj === "object" &&
-			Array.isArray(summaryObj.points)
-		) {
-			points = summaryObj.points;
-		} else if (typeof summaryObj === "object") {
-			// 防呆：排除標題並過濾長文
-			points = Object.values(summaryObj).filter(
-				(v) => typeof v === "string" && v !== title && v.length < 300,
-			);
-		} else {
-			points = [summaryObj];
-		}
-
-		const formattedSummary =
-			points.length > 0
-				? points
-						.slice(0, 3)
-						.map((p, i) => `${i + 1}. ${p}`)
-						.join("\n")
-				: "無法讀取摘要內容";
-
-		// 4. 發送至 Discord
 		for (const [webhook, keyword] of targetWebhooks) {
 			const payload = {
 				embeds: [
@@ -390,12 +409,11 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 							{ name: "日期", value: today, inline: true },
 							{ name: "新聞類別", value: type, inline: true },
 						],
-						footer: { text: "CNA News Bot" },
+						footer: { text: "News Bot (CNA/CDNS)" },
 						timestamp: new Date().toISOString(),
 					},
 				],
 			};
-
 			await fetch(webhook, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
