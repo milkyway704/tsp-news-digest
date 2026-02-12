@@ -8,7 +8,6 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = "每日新聞";
 
-// 同步主程式模型
 const PRIMARY_MODEL = "gemini-2.5-flash-lite";
 const BACKUP_MODEL = "gemini-2.5-flash";
 
@@ -17,7 +16,7 @@ const MAX_RETRY_PER_RUN = 20;
 const BASE_SLEEP_MS = 8000;
 
 // =========================
-// Google Sheets Client
+// 工具函式
 // =========================
 async function getSheetClient() {
 	const auth = new google.auth.GoogleAuth({
@@ -27,14 +26,23 @@ async function getSheetClient() {
 	return google.sheets({ version: "v4", auth });
 }
 
+async function smartFetch(url) {
+	const headers = {
+		"User-Agent":
+			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		Referer: "https://www.google.com/",
+	};
+	return await fetch(url, { headers });
+}
+
 // =========================
 // 主流程
 // =========================
 async function retryFailedSummaries() {
-	console.log("開始執行階梯式重試任務...");
+	console.log("開始執行深夜重試任務 (強化版)...");
 	const sheets = await getSheetClient();
 
-	// 讀取 A 到 G 欄位 (G 為全文)
 	const res = await sheets.spreadsheets.values.get({
 		spreadsheetId: SHEET_ID,
 		range: `${SHEET_NAME}!A:G`,
@@ -48,7 +56,7 @@ async function retryFailedSummaries() {
 	for (let i = 1; i < rows.length; i++) {
 		if (retriedCount >= MAX_RETRY_PER_RUN) break;
 
-		// 欄位索引：0:日期, 1:來源, 2:類別, 3:標題, 4:網址, 5:摘要, 6:全文
+		// 索引：1:來源, 2:類別, 3:標題, 4:網址, 5:摘要, 6:全文
 		const sourceName = rows[i][1] || "";
 		const newsType = rows[i][2] || "";
 		const title = rows[i][3] || "";
@@ -57,13 +65,12 @@ async function retryFailedSummaries() {
 		const fullText = rows[i][6] || "";
 
 		if (summaryCell.includes(RETRY_TARGET_TEXT) && fullText.length > 50) {
-			console.log(`\n--- 重試處理: [${sourceName}] ${title} ---`);
+			console.log(`\n--- 重新摘要: [${sourceName}] ${title} ---`);
 
-			let finalResult = null;
-			finalResult = await callGemini(fullText, PRIMARY_MODEL);
+			let finalResult = await callGemini(fullText, PRIMARY_MODEL);
 
 			if (finalResult.status === "429_limit") {
-				console.log(`觸發 429，冷卻 20 秒後嘗試備用模型...`);
+				console.log(`觸發 429，冷卻 20 秒...`);
 				await new Promise((r) => setTimeout(r, 20000));
 				finalResult = await callGemini(fullText, BACKUP_MODEL);
 			}
@@ -71,7 +78,7 @@ async function retryFailedSummaries() {
 			if (finalResult.status === "success") {
 				const formattedSummary = formatSummary(finalResult.summary);
 
-				// 1. 更新試算表
+				// 更新 F 欄 (摘要)
 				await sheets.spreadsheets.values.update({
 					spreadsheetId: SHEET_ID,
 					range: `${SHEET_NAME}!F${i + 1}`,
@@ -79,8 +86,7 @@ async function retryFailedSummaries() {
 					requestBody: { values: [[formattedSummary]] },
 				});
 
-				// 2. 【新增】重試成功後，補發 Discord 推播
-				// 這樣原本因為摘要失敗而沒發出的通知就能補上
+				// 補發 Discord
 				await sendToDiscord(
 					finalResult.summary,
 					link,
@@ -88,82 +94,22 @@ async function retryFailedSummaries() {
 					newsType,
 					fullText,
 				);
-
-				console.log(`✅ 第 ${i + 1} 列更新並補發 Discord 成功！`);
+				console.log(`✅ 重試成功並已更新資料。`);
+				retriedCount++;
 			} else {
-				console.log(`❌ 第 ${i + 1} 列最終失敗: ${finalResult.status}`);
+				console.log(`❌ 最終重試失敗: ${finalResult.status}`);
 			}
 
-			retriedCount++;
 			await new Promise((r) =>
-				setTimeout(r, BASE_SLEEP_MS + Math.random() * 4000),
+				setTimeout(r, BASE_SLEEP_MS + Math.random() * 3000),
 			);
 		}
 	}
 	console.log(`\n重試任務結束。`);
 }
 
-// =========================
-// 補推 Discord 邏輯 (需與主程式 sendToDiscord 一致)
-// =========================
-async function sendToDiscord(summaryObj, link, title, type, fullText) {
-	const configRaw = process.env.DISCORD_CONFIG;
-	if (!configRaw) return;
-	try {
-		const discordConfigs = JSON.parse(configRaw);
-		const points = summaryObj.points || [];
-		const summaryString = points.join(" ");
-
-		for (const config of discordConfigs) {
-			// 類別檢查
-			const isTargetType =
-				!config.targetTypes ||
-				config.targetTypes.length === 0 ||
-				config.targetTypes.includes(type);
-			if (!isTargetType) continue;
-
-			// 關鍵字檢查
-			const matchedKeyword = config.keywords.find(
-				(k) =>
-					title.includes(k) ||
-					summaryString.includes(k) ||
-					(fullText && fullText.includes(k)),
-			);
-
-			if (matchedKeyword) {
-				const payload = {
-					embeds: [
-						{
-							title: `📍 (重試補發) ${matchedKeyword}：${title}`,
-							url: link,
-							description: `**✨ 新聞摘要：**\n${points
-								.slice(0, 3)
-								.map((p, i) => `${i + 1}. ${p}`)
-								.join("\n")}`,
-							color: 16776960, // 黃色區分補發
-							fields: [
-								{ name: "新聞類別", value: type, inline: true },
-							],
-							timestamp: new Date().toISOString(),
-						},
-					],
-				};
-				await fetch(config.webhook, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(payload),
-				});
-			}
-		}
-	} catch (e) {
-		console.error("Discord 補發失敗:", e.message);
-	}
-}
-
 async function callGemini(text, model) {
-	const prompt = `你是專業的新聞編輯。請摘要以下內容，回傳純 JSON：
-{ "title": "標題", "points": ["點1", "點2", "點3"] }
-內容：\n${text}`;
+	const prompt = `你是專業的新聞編輯。請摘要以下內容，回傳純 JSON：\n{ "title": "標題", "points": ["點1", "點2", "點3"] }\n內容：\n${text}`;
 	try {
 		const res = await fetch(
 			`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
@@ -176,7 +122,6 @@ async function callGemini(text, model) {
 			},
 		);
 		if (res.status === 429) return { status: "429_limit" };
-		if (!res.ok) return { status: `HTTP_${res.status}` };
 		const json = await res.json();
 		let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
 		raw = raw.replace(/```json|```/g, "").trim();
@@ -187,8 +132,51 @@ async function callGemini(text, model) {
 }
 
 function formatSummary(s) {
-	if (!s.points) return String(s);
 	return `${s.title}\n1. ${s.points[0] || ""}\n2. ${s.points[1] || ""}\n3. ${s.points[2] || ""}`;
+}
+
+async function sendToDiscord(summaryObj, link, title, type, fullText) {
+	const configRaw = process.env.DISCORD_CONFIG;
+	if (!configRaw) return;
+	try {
+		const discordConfigs = JSON.parse(configRaw);
+		const points = summaryObj.points || [];
+		for (const config of discordConfigs) {
+			if (
+				config.targetTypes &&
+				config.targetTypes.length > 0 &&
+				!config.targetTypes.includes(type)
+			)
+				continue;
+			const matchedKeyword = config.keywords.find(
+				(k) =>
+					title.includes(k) ||
+					points.join("").includes(k) ||
+					fullText.includes(k),
+			);
+			if (matchedKeyword) {
+				const payload = {
+					embeds: [
+						{
+							title: `📍 (重試補發) ${matchedKeyword}：${title}`,
+							url: link,
+							description: `**✨ 新聞摘要：**\n${points
+								.slice(0, 3)
+								.map((p, i) => `${i + 1}. ${p}`)
+								.join("\n")}`,
+							color: 16776960,
+							timestamp: new Date().toISOString(),
+						},
+					],
+				};
+				await fetch(config.webhook, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(payload),
+				});
+			}
+		}
+	} catch (e) {}
 }
 
 retryFailedSummaries().catch(console.error);

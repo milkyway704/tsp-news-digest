@@ -163,9 +163,9 @@ async function main() {
 					.toISOString()
 					.slice(0, 10);
 
-				// 這裡就是你剛才出錯的地方，現在 title 已定義，可以放心印
+				// 日期過濾
 				if (pubDate !== today) {
-					console.log(`跳過日期不符: ${title} (${pubDate})`);
+					//console.log(`跳過日期不符: ${title} (${pubDate})`);
 					continue;
 				}
 
