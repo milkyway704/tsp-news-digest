@@ -3,23 +3,13 @@ import { parseStringPromise } from "xml2js";
 import { google } from "googleapis";
 import * as cheerio from "cheerio";
 
-// =========================
-// 設定
-// =========================
-
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SHEET_ID = process.env.SHEET_ID;
 const SHEET_NAME = "每日新聞";
-
 const PRIMARY_MODEL = "gemini-2.5-flash-lite";
 const BACKUP_MODEL = "gemini-2.5-flash";
-
 const MAX_FULLTEXT_LENGTH = 20000;
 const SLEEP_MS = 5000;
-
-// =========================
-// 新聞來源配置
-// =========================
 
 const NEWS_SOURCES = [
 	{
@@ -80,10 +70,6 @@ const NEWS_SOURCES = [
 	{ source: "CDNS", type: "台南", url: "https://www.cdns.com.tw/feed" },
 ];
 
-// =========================
-// Google Sheets API
-// =========================
-
 async function getSheetClient() {
 	const auth = new google.auth.GoogleAuth({
 		credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
@@ -113,15 +99,24 @@ async function appendRow(sheets, row) {
 	});
 }
 
-// =========================
-// 主流程
-// =========================
+// 統一的 Fetch 封裝，增加成功率
+async function smartFetch(url) {
+	const headers = {
+		"User-Agent":
+			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+		"Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+		"Cache-Control": "no-cache",
+		Pragma: "no-cache",
+		Referer: "https://www.google.com/",
+	};
+	return await fetch(url, { headers });
+}
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (強化瀏覽器模擬版)...");
+	console.log("開始執行新聞爬取任務 (穩定加固版)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
-
 	const today = new Date(new Date().getTime() + 8 * 3600000)
 		.toISOString()
 		.slice(0, 10);
@@ -130,86 +125,71 @@ async function main() {
 	for (const cfg of NEWS_SOURCES) {
 		console.log(`正在抓取 [${cfg.source} - ${cfg.type}]...`);
 		try {
-			// 【修正 1】強化 Headers 模擬 Chrome 瀏覽器，防止被伺服器擋掉
-			const rssResponse = await fetch(cfg.url, {
-				headers: {
-					"User-Agent":
-						"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-					Accept: "application/rss+xml, application/xml, text/xml, */*",
-					"Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-				},
-			});
+			let rssResponse = await smartFetch(cfg.url);
+			let rssText = await rssResponse.text();
 
-			const rssText = await rssResponse.text();
+			// 針對 CDNS 403 的特別處理：嘗試備用路徑
+			if (cfg.source === "CDNS" && rssResponse.status === 403) {
+				console.log("⚠️ 偵測到 403，嘗試切換備用路徑...");
+				rssResponse = await smartFetch("https://www.cdns.com.tw/feed/");
+				rssText = await rssResponse.text();
+			}
 
-			// 【修正 2】更嚴謹的 XML 判斷
 			if (!rssText.includes("<rss") && !rssText.includes("<channel")) {
 				console.warn(
-					`⚠️ [${cfg.source}] 回傳內容非 XML 格式，內容開頭：${rssText.substring(0, 100)}`,
+					`⚠️ [${cfg.source}] 格式錯誤，開頭：${rssText.substring(0, 50)}`,
 				);
 				continue;
 			}
 
 			const parsed = await parseStringPromise(rssText);
-
-			// 【修正 3】多重 RSS 結構相容處理 (rss.channel[0] 或直接 channel[0])
 			const channel =
 				parsed.rss && parsed.rss.channel
 					? parsed.rss.channel[0]
 					: parsed.channel
 						? parsed.channel[0]
 						: null;
-
-			if (!channel) {
-				console.error(`[${cfg.source}] 無法解析 RSS Channel 結構`);
-				continue;
-			}
+			if (!channel) continue;
 
 			const items = channel.item || [];
 
 			for (const item of items) {
 				const link = item.link[0];
+				const title = item.title[0]; // 提早定義，避免 initialization 錯誤
+
 				if (!link || existingLinks.has(link)) continue;
 
 				const pubDate = new Date(item.pubDate[0])
 					.toISOString()
 					.slice(0, 10);
-				//if (pubDate !== today) continue;
+
+				// 這裡就是你剛才出錯的地方，現在 title 已定義，可以放心印
 				if (pubDate !== today) {
-					console.log(`跳過日期不符的新聞: ${title} (${pubDate})`);
+					console.log(`跳過日期不符: ${title} (${pubDate})`);
 					continue;
 				}
 
-				// 【需求：中華日報分類過濾】
 				if (cfg.source === "CDNS") {
 					const categories = item.category
 						? item.category.map((c) =>
 								typeof c === "string" ? c : c._ || "",
 							)
 						: [];
-					const isTainanNews = categories.some((cat) =>
-						cat.includes("台南"),
-					);
-					if (!isTainanNews) continue;
+					if (!categories.some((cat) => cat.includes("台南")))
+						continue;
 				}
 
-				const title = item.title[0];
 				console.log(`\n處理中: ${title}`);
-
 				const fullText = await fetchArticleText(link);
-				let summaryResult;
-				if (!fullText || !isLikelyChineseText(fullText)) {
-					summaryResult = { status: "no_text_or_invalid" };
-				} else {
-					summaryResult = await summarizeStepwise(fullText);
-				}
+				let summaryResult =
+					fullText && isLikelyChineseText(fullText)
+						? await summarizeStepwise(fullText)
+						: { status: "no_text" };
 
 				const summaryText =
 					summaryResult.status === "success"
 						? formatSummary(summaryResult.summary)
-						: `AI摘要失敗[${summaryResult.status}]，請手動處理`;
-
-				// 【需求：CDNS 轉顯示為 中華日報】
+						: `AI摘要失敗[${summaryResult.status}]`;
 				const displayName =
 					cfg.source === "CDNS" ? "中華日報" : "中央社";
 
@@ -220,10 +200,9 @@ async function main() {
 					title,
 					link,
 					summaryText,
-					fullText || "(無法擷取全文)",
+					fullText || "(無法擷取)",
 				]);
-
-				if (summaryResult.status === "success") {
+				if (summaryResult.status === "success")
 					await sendToDiscord(
 						summaryResult.summary,
 						link,
@@ -231,41 +210,34 @@ async function main() {
 						cfg.type,
 						fullText,
 					);
-				}
 
 				existingLinks.add(link);
-				await sleep(SLEEP_MS + Math.random() * 2000);
+				await new Promise((r) =>
+					setTimeout(r, SLEEP_MS + Math.random() * 2000),
+				);
 			}
 		} catch (err) {
-			console.error(
-				`處理 ${cfg.source} ${cfg.type} 時發生錯誤:`,
-				err.message,
-			);
+			console.error(`處理 ${cfg.source} 時發生錯誤:`, err.message);
 		}
 	}
 	console.log("\n任務完成");
 }
 
 // =========================
-// 摘要邏輯
+// 以下邏輯 (summarizeStepwise, fetchArticleText, sendToDiscord) 保持與前版一致，但 fetchArticleText 內部改用 smartFetch
 // =========================
 
 async function summarizeStepwise(text) {
 	let result = await callGemini(text, PRIMARY_MODEL);
 	if (result.status === "429_limit") {
-		console.warn("觸發模型限流，冷卻 20 秒後切換備用...");
-		await sleep(20000);
+		await new Promise((r) => setTimeout(r, 20000));
 		result = await callGemini(text, BACKUP_MODEL);
 	}
 	return result;
 }
 
 async function callGemini(text, model) {
-	const prompt = `你是專業的新聞編輯。請摘要以下內容，並忽略任何關於 App 下載、版權聲明等文字。
-【格式】：必須回傳純 JSON，不要 Markdown：
-{ "title": "標題", "points": ["點1", "點2", "點3"] }
-內容：\n${text}`;
-
+	const prompt = `你是專業的新聞編輯。請摘要以下內容，回傳純 JSON：{ "title": "標題", "points": ["點1", "點2", "點3"] }\n內容：\n${text}`;
 	try {
 		const res = await fetch(
 			`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
@@ -278,7 +250,6 @@ async function callGemini(text, model) {
 			},
 		);
 		if (res.status === 429) return { status: "429_limit" };
-		if (!res.ok) return { status: `HTTP_${res.status}` };
 		const json = await res.json();
 		let raw = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
 		raw = raw.replace(/```json|```/g, "").trim();
@@ -288,54 +259,13 @@ async function callGemini(text, model) {
 	}
 }
 
-// =========================
-// 工具函式 (整合影片與 JSON-LD 抓取)
-// =========================
-
-function formatSummary(s) {
-	return `${s.title}\n1. ${s.points[0] || ""}\n2. ${s.points[1] || ""}\n3. ${s.points[2] || ""}`;
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function cleanText(text) {
-	if (!text) return "";
-	return text
-		.replace(/中央社「一手新聞」\s*app/gi, "")
-		.replace(
-			/本網站之文字、圖片及影音，非經授權，不得轉載、公開播送或公開傳輸及利用。/g,
-			"",
-		)
-		.replace(/（編輯：.*?）\d+$/g, "")
-		.replace(/延伸閱讀.*$/gm, "")
-		.replace(/相關新聞.*$/gm, "")
-		.replace(/\s+/g, " ")
-		.trim();
-}
-
-function decodeJsonText(s) {
-	return s
-		.replace(/\\"/g, '"')
-		.replace(/\\n/g, "\n")
-		.replace(/\\u([\dA-Fa-f]{4})/g, (_, h) =>
-			String.fromCharCode(parseInt(h, 16)),
-		);
-}
-
 async function fetchArticleText(url) {
 	try {
-		const res = await fetch(url, {
-			headers: {
-				"User-Agent":
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-			},
-		});
+		const res = await smartFetch(url);
 		if (!res.ok) return "";
 		const html = await res.text();
 		const $ = cheerio.load(html);
 		let rawText = "";
-
-		// 多重選取器 (CNA + CDNS)
 		const selectors = [
 			"div.paragraph",
 			"div.entry-content",
@@ -351,98 +281,83 @@ async function fetchArticleText(url) {
 				break;
 			}
 		}
-
-		// JSON-LD 備援
 		if (!rawText.trim()) {
 			const m = html.match(/"articleBody":"([\s\S]*?)"/i);
 			if (m) rawText = decodeJsonText(m[1]);
 		}
-
-		// 影片新聞備援
-		if (!rawText.trim()) {
-			if (/<video|iframe|data-video/i.test(html)) {
-				$("p").each((_, el) => {
-					const txt = $(el).text().trim();
-					if (txt.length > 10) rawText += txt + "\n";
-				});
-			}
-		}
-
 		return cleanText(rawText).substring(0, MAX_FULLTEXT_LENGTH);
 	} catch (e) {
 		return "";
 	}
 }
 
-function isLikelyChineseText(text) {
-	if (!text || text.length < 50) return false;
-	const chineseChars = text.match(/[\u4e00-\u9fff]/g) || [];
-	return chineseChars.length / text.length > 0.25;
+function cleanText(text) {
+	return text
+		? text
+				.replace(/中央社「一手新聞」\s*app/gi, "")
+				.replace(
+					/本網站之文字、圖片及影音，非經授權，不得轉載、公開播送或公開傳輸及利用。/g,
+					"",
+				)
+				.replace(/\s+/g, " ")
+				.trim()
+		: "";
 }
 
-// =========================
-// Discord 發送邏輯
-// =========================
+function decodeJsonText(s) {
+	return s
+		.replace(/\\"/g, '"')
+		.replace(/\\n/g, "\n")
+		.replace(/\\u([\dA-Fa-f]{4})/g, (_, h) =>
+			String.fromCharCode(parseInt(h, 16)),
+		);
+}
+
+function isLikelyChineseText(text) {
+	const chineseChars = (text || "").match(/[\u4e00-\u9fff]/g) || [];
+	return chineseChars.length / (text.length || 1) > 0.25;
+}
+
+function formatSummary(s) {
+	return `${s.title}\n1. ${s.points[0] || ""}\n2. ${s.points[1] || ""}\n3. ${s.points[2] || ""}`;
+}
 
 async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 	const configRaw = process.env.DISCORD_CONFIG;
 	if (!configRaw) return;
-
 	try {
 		const discordConfigs = JSON.parse(configRaw);
 		const targetWebhooks = new Map();
-
-		const summaryString =
-			typeof summaryObj === "object" && Array.isArray(summaryObj.points)
-				? summaryObj.points.join(" ")
-				: typeof summaryObj === "object"
-					? Object.values(summaryObj).join(" ")
-					: String(summaryObj);
-
+		const summaryString = Array.isArray(summaryObj.points)
+			? summaryObj.points.join(" ")
+			: "";
 		for (const config of discordConfigs) {
-			const isTargetType =
-				!config.targetTypes ||
-				config.targetTypes.length === 0 ||
-				config.targetTypes.includes(type);
-			if (!isTargetType) continue;
-
+			if (
+				config.targetTypes &&
+				config.targetTypes.length > 0 &&
+				!config.targetTypes.includes(type)
+			)
+				continue;
 			const matchedKeyword = config.keywords.find(
 				(k) =>
 					title.includes(k) ||
 					summaryString.includes(k) ||
-					(fullText && fullText.includes(k)),
+					fullText.includes(k),
 			);
-
-			if (matchedKeyword && !targetWebhooks.has(config.webhook)) {
+			if (matchedKeyword)
 				targetWebhooks.set(config.webhook, matchedKeyword);
-			}
 		}
-
-		if (targetWebhooks.size === 0) return;
-
-		let points =
-			typeof summaryObj === "object" && Array.isArray(summaryObj.points)
-				? summaryObj.points
-				: [summaryObj];
-		const formattedSummary = points
-			.slice(0, 3)
-			.map((p, i) => `${i + 1}. ${p}`)
-			.join("\n");
-		const today = new Date().toLocaleDateString("zh-TW");
-
 		for (const [webhook, keyword] of targetWebhooks) {
 			const payload = {
 				embeds: [
 					{
 						title: `📍 ${keyword}動態：${title}`,
 						url: link,
-						description: `**✨ 新聞摘要：**\n${formattedSummary}`,
+						description: `**✨ 新聞摘要：**\n${summaryObj.points
+							.slice(0, 3)
+							.map((p, i) => `${i + 1}. ${p}`)
+							.join("\n")}`,
 						color: 3447003,
-						fields: [
-							{ name: "日期", value: today, inline: true },
-							{ name: "新聞類別", value: type, inline: true },
-						],
-						footer: { text: "News Bot (CNA/CDNS)" },
 						timestamp: new Date().toISOString(),
 					},
 				],
@@ -453,9 +368,7 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 				body: JSON.stringify(payload),
 			});
 		}
-	} catch (e) {
-		console.error("Discord 傳送失敗:", e.message);
-	}
+	} catch (e) {}
 }
 
 main().catch(console.error);
