@@ -174,7 +174,11 @@ async function main() {
 				const pubDate = new Date(item.pubDate[0])
 					.toISOString()
 					.slice(0, 10);
-				if (pubDate !== today) continue;
+				//if (pubDate !== today) continue;
+				if (pubDate !== today) {
+					console.log(`跳過日期不符的新聞: ${title} (${pubDate})`);
+					continue;
+				}
 
 				// 【需求：中華日報分類過濾】
 				if (cfg.source === "CDNS") {
