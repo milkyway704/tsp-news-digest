@@ -18,7 +18,7 @@ const MAX_FULLTEXT_LENGTH = 20000;
 const SLEEP_MS = 5000;
 
 // =========================
-// 新聞來源配置 (整合中央社與中華日報)
+// 新聞來源配置
 // =========================
 
 const NEWS_SOURCES = [
@@ -77,7 +77,6 @@ const NEWS_SOURCES = [
 		type: "娛樂",
 		url: "https://feeds.feedburner.com/rsscna/stars",
 	},
-	// 中華日報：維持全站 RSS，由程式過濾分類
 	{ source: "CDNS", type: "台南", url: "https://www.cdns.com.tw/feed" },
 ];
 
@@ -119,7 +118,7 @@ async function appendRow(sheets, row) {
 // =========================
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (中央社 + 中華日報)...");
+	console.log("開始執行新聞爬取任務 (強化瀏覽器模擬版)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
@@ -131,29 +130,42 @@ async function main() {
 	for (const cfg of NEWS_SOURCES) {
 		console.log(`正在抓取 [${cfg.source} - ${cfg.type}]...`);
 		try {
-			const rssResponse = await fetch(cfg.url);
+			// 【修正 1】強化 Headers 模擬 Chrome 瀏覽器，防止被伺服器擋掉
+			const rssResponse = await fetch(cfg.url, {
+				headers: {
+					"User-Agent":
+						"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+					Accept: "application/rss+xml, application/xml, text/xml, */*",
+					"Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+				},
+			});
+
 			const rssText = await rssResponse.text();
 
-			// 加入檢查：如果回傳不是 XML 格式就跳過
-			if (!rssText.includes("<rss")) {
-				console.warn(`[${cfg.source}] 回傳內容非標準 RSS，跳過處理。`);
+			// 【修正 2】更嚴謹的 XML 判斷
+			if (!rssText.includes("<rss") && !rssText.includes("<channel")) {
+				console.warn(
+					`⚠️ [${cfg.source}] 回傳內容非 XML 格式，內容開頭：${rssText.substring(0, 100)}`,
+				);
 				continue;
 			}
 
 			const parsed = await parseStringPromise(rssText);
 
-			// 使用安全導引與多重結構相容
-			const channel = parsed.rss
-				? parsed.rss.channel[0]
-				: parsed.feed
-					? parsed.feed
-					: null;
+			// 【修正 3】多重 RSS 結構相容處理 (rss.channel[0] 或直接 channel[0])
+			const channel =
+				parsed.rss && parsed.rss.channel
+					? parsed.rss.channel[0]
+					: parsed.channel
+						? parsed.channel[0]
+						: null;
+
 			if (!channel) {
 				console.error(`[${cfg.source}] 無法解析 RSS Channel 結構`);
 				continue;
 			}
-			// 支援 RSS (item) 與 Atom (entry) 格式
-			const items = channel.item || channel.entry || [];
+
+			const items = channel.item || [];
 
 			for (const item of items) {
 				const link = item.link[0];
@@ -164,7 +176,7 @@ async function main() {
 					.slice(0, 10);
 				if (pubDate !== today) continue;
 
-				// 【功能加強：中華日報分類過濾】
+				// 【需求：中華日報分類過濾】
 				if (cfg.source === "CDNS") {
 					const categories = item.category
 						? item.category.map((c) =>
@@ -193,7 +205,7 @@ async function main() {
 						? formatSummary(summaryResult.summary)
 						: `AI摘要失敗[${summaryResult.status}]，請手動處理`;
 
-				// 【需求修正：顯示名稱轉換】
+				// 【需求：CDNS 轉顯示為 中華日報】
 				const displayName =
 					cfg.source === "CDNS" ? "中華日報" : "中央社";
 
@@ -218,8 +230,7 @@ async function main() {
 				}
 
 				existingLinks.add(link);
-				const jitter = Math.random() * 2000;
-				await sleep(SLEEP_MS + jitter);
+				await sleep(SLEEP_MS + Math.random() * 2000);
 			}
 		} catch (err) {
 			console.error(
@@ -238,6 +249,7 @@ async function main() {
 async function summarizeStepwise(text) {
 	let result = await callGemini(text, PRIMARY_MODEL);
 	if (result.status === "429_limit") {
+		console.warn("觸發模型限流，冷卻 20 秒後切換備用...");
 		await sleep(20000);
 		result = await callGemini(text, BACKUP_MODEL);
 	}
@@ -273,7 +285,7 @@ async function callGemini(text, model) {
 }
 
 // =========================
-// 工具函式
+// 工具函式 (整合影片與 JSON-LD 抓取)
 // =========================
 
 function formatSummary(s) {
@@ -311,7 +323,7 @@ async function fetchArticleText(url) {
 		const res = await fetch(url, {
 			headers: {
 				"User-Agent":
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 			},
 		});
 		if (!res.ok) return "";
@@ -319,7 +331,7 @@ async function fetchArticleText(url) {
 		const $ = cheerio.load(html);
 		let rawText = "";
 
-		// 【保留並整合】多重選取器 (中央社 paragraph + 中華日報 entry-content)
+		// 多重選取器 (CNA + CDNS)
 		const selectors = [
 			"div.paragraph",
 			"div.entry-content",
@@ -336,13 +348,13 @@ async function fetchArticleText(url) {
 			}
 		}
 
-		// 【保留】JSON-LD 抓取邏輯
+		// JSON-LD 備援
 		if (!rawText.trim()) {
 			const m = html.match(/"articleBody":"([\s\S]*?)"/i);
 			if (m) rawText = decodeJsonText(m[1]);
 		}
 
-		// 【保留】影片新聞處理邏輯
+		// 影片新聞備援
 		if (!rawText.trim()) {
 			if (/<video|iframe|data-video/i.test(html)) {
 				$("p").each((_, el) => {
@@ -384,14 +396,12 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 					: String(summaryObj);
 
 		for (const config of discordConfigs) {
-			// 類別過濾
 			const isTargetType =
 				!config.targetTypes ||
 				config.targetTypes.length === 0 ||
 				config.targetTypes.includes(type);
 			if (!isTargetType) continue;
 
-			// 關鍵字比對
 			const matchedKeyword = config.keywords.find(
 				(k) =>
 					title.includes(k) ||
