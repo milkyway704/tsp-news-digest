@@ -68,6 +68,16 @@ const NEWS_SOURCES = [
 		url: "https://feeds.feedburner.com/rsscna/stars",
 	},
 	{ source: "CDNS", type: "台南", url: "https://www.cdns.com.tw/feed" },
+	{
+		source: "LTN",
+		type: "地方",
+		url: "https://news.ltn.com.tw/rss/local.xml",
+	},
+	{
+		source: "UDN",
+		type: "地方",
+		url: "https://udn.com.tw/news/rssfeed/6641",
+	},
 ];
 
 async function getSheetClient() {
@@ -90,12 +100,11 @@ async function getExistingLinks(sheets) {
 	}
 }
 
-// 恢復為最穩定的附加模式
 async function appendRow(sheets, row) {
 	await sheets.spreadsheets.values.append({
 		spreadsheetId: SHEET_ID,
 		range: `${SHEET_NAME}!A1`,
-		valueInputOption: "USER_ENTERED", // 確保日期格式正確，不帶單引號
+		valueInputOption: "USER_ENTERED",
 		requestBody: { values: [row] },
 	});
 }
@@ -112,7 +121,7 @@ async function smartFetch(url) {
 }
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (穩定 Append 版)...");
+	console.log("開始執行新聞爬取任務 (通用來源版)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
@@ -159,18 +168,9 @@ async function main() {
 				const pubDateTW = new Date(pubDateUTC.getTime() + 8 * 3600000);
 				const itemDateStr = pubDateTW.toISOString().slice(0, 10);
 
+				// 僅比對日期，不再硬編碼「台南」過濾
 				if (itemDateStr !== today && itemDateStr !== yesterday)
 					continue;
-
-				if (cfg.source === "CDNS") {
-					const categories = item.category
-						? item.category.map((c) =>
-								typeof c === "string" ? c : c._ || "",
-							)
-						: [];
-					if (!categories.some((cat) => cat.includes("台南")))
-						continue;
-				}
 
 				console.log(`\n處理中: ${title} (${itemDateStr})`);
 				const fullText = await fetchArticleText(link);
@@ -183,10 +183,16 @@ async function main() {
 					summaryResult.status === "success"
 						? formatSummary(summaryResult.summary)
 						: `AI摘要失敗[${summaryResult.status}]`;
-				const displayName =
-					cfg.source === "CDNS" ? "中華日報" : "中央社";
 
-				// 寫入資料：附加到最後一列
+				// 動態對應顯示名稱
+				const nameMap = {
+					CNA: "中央社",
+					CDNS: "中華日報",
+					LTN: "自由時報",
+					UDN: "聯合新聞網",
+				};
+				const displayName = nameMap[cfg.source] || cfg.source;
+
 				await appendRow(sheets, [
 					itemDateStr,
 					displayName,
@@ -258,11 +264,15 @@ async function fetchArticleText(url) {
 		const html = await res.text();
 		const $ = cheerio.load(html);
 		let rawText = "";
+		// 擴充選擇器以相容自由、聯合
 		const selectors = [
 			"div.paragraph",
 			"div.entry-content",
 			"div.article-body",
 			"div.article-content",
+			"section.article-content__editor",
+			"div.text",
+			"article div.p",
 		];
 		for (const sel of selectors) {
 			const found = $(sel);
@@ -284,16 +294,7 @@ async function fetchArticleText(url) {
 }
 
 function cleanText(text) {
-	return text
-		? text
-				.replace(/中央社「一手新聞」\s*app/gi, "")
-				.replace(
-					/本網站之文字、圖片及影音，非經授權，不得轉載、公開播送或公開傳輸及利用。/g,
-					"",
-				)
-				.replace(/\s+/g, " ")
-				.trim()
-		: "";
+	return text ? text.replace(/\s+/g, " ").trim() : "";
 }
 
 function decodeJsonText(s) {

@@ -32,15 +32,7 @@ async function retryFailedSummaries() {
 	for (let i = 1; i < rows.length; i++) {
 		if (retriedCount >= MAX_RETRY_PER_RUN) break;
 
-		const [date, source, type, title, link, summary, fullText] = [
-			rows[i][0],
-			rows[i][1],
-			rows[i][2],
-			rows[i][3],
-			rows[i][4],
-			rows[i][5],
-			rows[i][6],
-		];
+		const [date, source, type, title, link, summary, fullText] = rows[i];
 
 		if (
 			summary &&
@@ -58,7 +50,6 @@ async function retryFailedSummaries() {
 			if (result.status === "success") {
 				const formatted = `${result.summary.title}\n1. ${result.summary.points[0]}\n2. ${result.summary.points[1]}\n3. ${result.summary.points[2]}`;
 
-				// 【修正】使用 USER_ENTERED，確保日期欄位不會被重新加回單引號
 				await sheets.spreadsheets.values.update({
 					spreadsheetId: SHEET_ID,
 					range: `${SHEET_NAME}!F${i + 1}`,
