@@ -90,7 +90,6 @@ async function getExistingLinks(sheets) {
 	}
 }
 
-// 【修正重點：改為插入在頂部，並使用 USER_ENTERED】
 async function insertRowAtTop(sheets, row) {
 	// 1. 先在第 2 列位置插入空白行
 	await sheets.spreadsheets.batchUpdate({
@@ -112,7 +111,7 @@ async function insertRowAtTop(sheets, row) {
 		},
 	});
 
-	// 2. 寫入資料，使用 USER_ENTERED 移除日期前的單引號
+	// 2. 寫入資料，使用 USER_ENTERED 移除日期前的單引號並讓 Google 自動辨識日期格式
 	await sheets.spreadsheets.values.update({
 		spreadsheetId: SHEET_ID,
 		range: `${SHEET_NAME}!A2:G2`,
@@ -133,13 +132,19 @@ async function smartFetch(url) {
 }
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (日期格式修正版)...");
+	console.log("開始執行新聞爬取任務 (時區與日期格式修正版)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
-	const today = new Date(new Date().getTime() + 8 * 3600000)
+
+	// 取得台灣目前的日期 (YYYY-MM-DD)
+	const nowTW = new Date(new Date().getTime() + 8 * 3600000);
+	const today = nowTW.toISOString().slice(0, 10);
+	// 取得昨天的日期作為容錯範圍，防止清晨抓不到深夜新聞
+	const yesterday = new Date(nowTW.getTime() - 86400000)
 		.toISOString()
 		.slice(0, 10);
-	console.log(`目標日期: ${today}`);
+
+	console.log(`目標日期: ${today} (容錯範圍: ${yesterday})`);
 
 	for (const cfg of NEWS_SOURCES) {
 		console.log(`正在抓取 [${cfg.source} - ${cfg.type}]...`);
@@ -171,10 +176,14 @@ async function main() {
 				const title = item.title[0];
 				if (!link || existingLinks.has(link)) continue;
 
-				const pubDate = new Date(item.pubDate[0])
-					.toISOString()
-					.slice(0, 10);
-				if (pubDate !== today) continue;
+				// 【時區校正】：將新聞發布時間轉回台灣時區日期進行比對
+				const pubDateUTC = new Date(item.pubDate[0]);
+				const pubDateTW = new Date(pubDateUTC.getTime() + 8 * 3600000);
+				const itemDateStr = pubDateTW.toISOString().slice(0, 10);
+
+				// 只要是今天或昨天的新聞都收進去，existingLinks 會防止重複
+				if (itemDateStr !== today && itemDateStr !== yesterday)
+					continue;
 
 				if (cfg.source === "CDNS") {
 					const categories = item.category
@@ -186,7 +195,7 @@ async function main() {
 						continue;
 				}
 
-				console.log(`\n處理中: ${title}`);
+				console.log(`\n處理中: ${title} (${itemDateStr})`);
 				const fullText = await fetchArticleText(link);
 				let summaryResult =
 					fullText && isLikelyChineseText(fullText)
@@ -200,9 +209,9 @@ async function main() {
 				const displayName =
 					cfg.source === "CDNS" ? "中華日報" : "中央社";
 
-				// 改用 insertRowAtTop 插入最新資料到頂部
+				// 使用 insertRowAtTop 將最新資料寫入第 2 列
 				await insertRowAtTop(sheets, [
-					today,
+					itemDateStr,
 					displayName,
 					cfg.type,
 					title,
@@ -211,7 +220,7 @@ async function main() {
 					fullText || "(無法擷取)",
 				]);
 
-				if (summaryResult.status === "success")
+				if (summaryResult.status === "success") {
 					await sendToDiscord(
 						summaryResult.summary,
 						link,
@@ -219,6 +228,7 @@ async function main() {
 						cfg.type,
 						fullText,
 					);
+				}
 
 				existingLinks.add(link);
 				await new Promise((r) =>
@@ -231,8 +241,6 @@ async function main() {
 	}
 	console.log("\n任務完成");
 }
-
-// ... (省略後續 summarizeStepwise, callGemini, fetchArticleText, sendToDiscord 邏輯，皆維持與前版一致) ...
 
 async function summarizeStepwise(text) {
 	let result = await callGemini(text, PRIMARY_MODEL);
