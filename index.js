@@ -73,11 +73,7 @@ const NEWS_SOURCES = [
 		type: "地方",
 		url: "https://news.ltn.com.tw/rss/local.xml",
 	},
-	{
-		source: "UDN",
-		type: "地方",
-		url: "https://udn.com.tw/news/rssfeed/6641",
-	},
+	{ source: "UDN", type: "地方", url: "https://udn.com/news/rssfeed/6641" }, // 嘗試移除 .tw
 ];
 
 async function getSheetClient() {
@@ -112,16 +108,17 @@ async function appendRow(sheets, row) {
 async function smartFetch(url) {
 	const headers = {
 		"User-Agent":
-			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+			"Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1", // 改用移動版模擬更易穿透
+		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
 		"Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-		Referer: "https://www.google.com/",
+		"Cache-Control": "no-cache",
+		Pragma: "no-cache",
 	};
-	return await fetch(url, { headers });
+	return await fetch(url, { headers, timeout: 15000 });
 }
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (通用來源版)...");
+	console.log("開始執行新聞爬取任務 (加強抓取版)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
@@ -138,11 +135,6 @@ async function main() {
 		try {
 			let rssResponse = await smartFetch(cfg.url);
 			let rssText = await rssResponse.text();
-
-			if (cfg.source === "CDNS" && rssResponse.status === 403) {
-				rssResponse = await smartFetch("https://www.cdns.com.tw/feed/");
-				rssText = await rssResponse.text();
-			}
 
 			if (!rssText.includes("<rss") && !rssText.includes("<channel"))
 				continue;
@@ -163,19 +155,21 @@ async function main() {
 				const title = item.title[0];
 				if (!link || existingLinks.has(link)) continue;
 
-				// 時區校正：判斷新聞發布日期
 				const pubDateUTC = new Date(item.pubDate[0]);
 				const pubDateTW = new Date(pubDateUTC.getTime() + 8 * 3600000);
 				const itemDateStr = pubDateTW.toISOString().slice(0, 10);
 
-				// 僅比對日期，不再硬編碼「台南」過濾
 				if (itemDateStr !== today && itemDateStr !== yesterday)
 					continue;
 
 				console.log(`\n處理中: ${title} (${itemDateStr})`);
 				const fullText = await fetchArticleText(link);
+
+				// 檢查文字長度，LTN 有時會抓到一堆 JS，我們要在 fetchArticleText 處理
 				let summaryResult =
-					fullText && isLikelyChineseText(fullText)
+					fullText &&
+					fullText.length > 100 &&
+					isLikelyChineseText(fullText)
 						? await summarizeStepwise(fullText)
 						: { status: "no_text" };
 
@@ -184,7 +178,6 @@ async function main() {
 						? formatSummary(summaryResult.summary)
 						: `AI摘要失敗[${summaryResult.status}]`;
 
-				// 動態對應顯示名稱
 				const nameMap = {
 					CNA: "中央社",
 					CDNS: "中華日報",
@@ -263,30 +256,40 @@ async function fetchArticleText(url) {
 		if (!res.ok) return "";
 		const html = await res.text();
 		const $ = cheerio.load(html);
+
+		// 重要：移除所有不必要的標籤內容
+		$("script, style, iframe, header, footer, nav, .ltnpoll, .ad").remove();
+
 		let rawText = "";
-		// 擴充選擇器以相容自由、聯合
+		// 針對不同媒體的精準選擇器
 		const selectors = [
-			"div.paragraph",
+			"div.whitecon > div.text", // LTN 常用
+			"div.article-content__editor", // UDN 常用
+			"div.paragraph", // CNA 常用
 			"div.entry-content",
 			"div.article-body",
-			"div.article-content",
 			"section.article-content__editor",
-			"div.text",
-			"article div.p",
+			"div[itemprop='articleBody']",
 		];
+
 		for (const sel of selectors) {
 			const found = $(sel);
 			if (found.length > 0) {
-				found.each((_, el) => {
-					rawText += $(el).text() + "\n";
-				});
+				// 移除內容中的 JS 代碼塊
+				found.find("script").remove();
+				rawText = found.text();
 				break;
 			}
 		}
+
+		// 如果上述選擇器都沒抓到，嘗試抓取所有 <p> 標籤
 		if (!rawText.trim()) {
-			const m = html.match(/"articleBody":"([\s\S]*?)"/i);
-			if (m) rawText = decodeJsonText(m[1]);
+			rawText = $("p")
+				.map((_, el) => $(el).text())
+				.get()
+				.join("\n");
 		}
+
 		return cleanText(rawText).substring(0, MAX_FULLTEXT_LENGTH);
 	} catch (e) {
 		return "";
@@ -294,21 +297,17 @@ async function fetchArticleText(url) {
 }
 
 function cleanText(text) {
-	return text ? text.replace(/\s+/g, " ").trim() : "";
-}
-
-function decodeJsonText(s) {
-	return s
-		.replace(/\\"/g, '"')
-		.replace(/\\n/g, "\n")
-		.replace(/\\u([\dA-Fa-f]{4})/g, (_, h) =>
-			String.fromCharCode(parseInt(h, 16)),
-		);
+	if (!text) return "";
+	return text
+		.replace(/const\s.*?\);/gs, "") // 移除內嵌的 JS 代碼
+		.replace(/function\s.*?\{.*?\}/gs, "") // 移除內嵌的 Function
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 function isLikelyChineseText(text) {
 	const chineseChars = (text || "").match(/[\u4e00-\u9fff]/g) || [];
-	return chineseChars.length / (text.length || 1) > 0.25;
+	return chineseChars.length > 50; // 至少要有 50 個中文字才算有效內容
 }
 
 function formatSummary(s) {
@@ -335,7 +334,7 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 				(k) =>
 					title.includes(k) ||
 					summaryString.includes(k) ||
-					fullText.includes(k),
+					(fullText && fullText.includes(k)),
 			);
 			if (matchedKeyword)
 				targetWebhooks.set(config.webhook, matchedKeyword);
