@@ -90,32 +90,12 @@ async function getExistingLinks(sheets) {
 	}
 }
 
-async function insertRowAtTop(sheets, row) {
-	// 1. 先在第 2 列位置插入空白行
-	await sheets.spreadsheets.batchUpdate({
+// 恢復為最穩定的附加模式
+async function appendRow(sheets, row) {
+	await sheets.spreadsheets.values.append({
 		spreadsheetId: SHEET_ID,
-		requestBody: {
-			requests: [
-				{
-					insertDimension: {
-						range: {
-							sheetId: 0, // 如果你的 gid 不是 0，請修改此處
-							dimension: "ROWS",
-							startIndex: 1,
-							endIndex: 2,
-						},
-						inheritFromBefore: false,
-					},
-				},
-			],
-		},
-	});
-
-	// 2. 寫入資料，使用 USER_ENTERED 移除日期前的單引號並讓 Google 自動辨識日期格式
-	await sheets.spreadsheets.values.update({
-		spreadsheetId: SHEET_ID,
-		range: `${SHEET_NAME}!A2:G2`,
-		valueInputOption: "USER_ENTERED",
+		range: `${SHEET_NAME}!A1`,
+		valueInputOption: "USER_ENTERED", // 確保日期格式正確，不帶單引號
 		requestBody: { values: [row] },
 	});
 }
@@ -132,14 +112,12 @@ async function smartFetch(url) {
 }
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (時區與日期格式修正版)...");
+	console.log("開始執行新聞爬取任務 (穩定 Append 版)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
-	// 取得台灣目前的日期 (YYYY-MM-DD)
 	const nowTW = new Date(new Date().getTime() + 8 * 3600000);
 	const today = nowTW.toISOString().slice(0, 10);
-	// 取得昨天的日期作為容錯範圍，防止清晨抓不到深夜新聞
 	const yesterday = new Date(nowTW.getTime() - 86400000)
 		.toISOString()
 		.slice(0, 10);
@@ -176,12 +154,11 @@ async function main() {
 				const title = item.title[0];
 				if (!link || existingLinks.has(link)) continue;
 
-				// 【時區校正】：將新聞發布時間轉回台灣時區日期進行比對
+				// 時區校正：判斷新聞發布日期
 				const pubDateUTC = new Date(item.pubDate[0]);
 				const pubDateTW = new Date(pubDateUTC.getTime() + 8 * 3600000);
 				const itemDateStr = pubDateTW.toISOString().slice(0, 10);
 
-				// 只要是今天或昨天的新聞都收進去，existingLinks 會防止重複
 				if (itemDateStr !== today && itemDateStr !== yesterday)
 					continue;
 
@@ -209,8 +186,8 @@ async function main() {
 				const displayName =
 					cfg.source === "CDNS" ? "中華日報" : "中央社";
 
-				// 使用 insertRowAtTop 將最新資料寫入第 2 列
-				await insertRowAtTop(sheets, [
+				// 寫入資料：附加到最後一列
+				await appendRow(sheets, [
 					itemDateStr,
 					displayName,
 					cfg.type,
