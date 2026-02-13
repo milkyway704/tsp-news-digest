@@ -31,9 +31,7 @@ async function retryFailedSummaries() {
 	let retriedCount = 0;
 	for (let i = 1; i < rows.length; i++) {
 		if (retriedCount >= MAX_RETRY_PER_RUN) break;
-
 		const [date, source, type, title, link, summary, fullText] = rows[i];
-
 		if (
 			summary &&
 			summary.includes(RETRY_TARGET_TEXT) &&
@@ -46,24 +44,15 @@ async function retryFailedSummaries() {
 				await new Promise((r) => setTimeout(r, 20000));
 				result = await callGemini(fullText, BACKUP_MODEL);
 			}
-
 			if (result.status === "success") {
 				const formatted = `${result.summary.title}\n1. ${result.summary.points[0]}\n2. ${result.summary.points[1]}\n3. ${result.summary.points[2]}`;
-
 				await sheets.spreadsheets.values.update({
 					spreadsheetId: SHEET_ID,
 					range: `${SHEET_NAME}!F${i + 1}`,
 					valueInputOption: "USER_ENTERED",
 					requestBody: { values: [[formatted]] },
 				});
-
-				await sendToDiscord(
-					result.summary,
-					link,
-					title,
-					type,
-					fullText,
-				);
+				await sendToDiscord(result.summary, link, title, type);
 				retriedCount++;
 			}
 		}
@@ -93,12 +82,13 @@ async function callGemini(text, model) {
 	}
 }
 
-async function sendToDiscord(summaryObj, link, title, type, fullText) {
+async function sendToDiscord(summaryObj, link, title, type) {
 	const configRaw = process.env.DISCORD_CONFIG;
 	if (!configRaw) return;
 	try {
 		const discordConfigs = JSON.parse(configRaw);
 		const points = summaryObj.points || [];
+		const summaryString = points.join(" ");
 		for (const config of discordConfigs) {
 			if (
 				config.targetTypes?.length > 0 &&
@@ -106,10 +96,7 @@ async function sendToDiscord(summaryObj, link, title, type, fullText) {
 			)
 				continue;
 			const matchedKeyword = config.keywords.find(
-				(k) =>
-					title.includes(k) ||
-					points.join("").includes(k) ||
-					fullText.includes(k),
+				(k) => title.includes(k) || summaryString.includes(k),
 			);
 			if (matchedKeyword) {
 				const payload = {

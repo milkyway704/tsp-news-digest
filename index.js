@@ -73,7 +73,7 @@ const NEWS_SOURCES = [
 		type: "地方",
 		url: "https://news.ltn.com.tw/rss/local.xml",
 	},
-	{ source: "UDN", type: "地方", url: "https://udn.com/news/rssfeed/6641" }, // 嘗試移除 .tw
+	{ source: "UDN", type: "地方", url: "https://udn.com/news/rssfeed/6641" },
 ];
 
 async function getSheetClient() {
@@ -108,17 +108,15 @@ async function appendRow(sheets, row) {
 async function smartFetch(url) {
 	const headers = {
 		"User-Agent":
-			"Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1", // 改用移動版模擬更易穿透
+			"Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
 		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
 		"Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-		"Cache-Control": "no-cache",
-		Pragma: "no-cache",
 	};
 	return await fetch(url, { headers, timeout: 15000 });
 }
 
 async function main() {
-	console.log("開始執行新聞爬取任務 (加強抓取版)...");
+	console.log("開始執行新聞爬取任務 (穩定版)...");
 	const sheets = await getSheetClient();
 	const existingLinks = await getExistingLinks(sheets);
 
@@ -165,11 +163,8 @@ async function main() {
 				console.log(`\n處理中: ${title} (${itemDateStr})`);
 				const fullText = await fetchArticleText(link);
 
-				// 檢查文字長度，LTN 有時會抓到一堆 JS，我們要在 fetchArticleText 處理
 				let summaryResult =
-					fullText &&
-					fullText.length > 100 &&
-					isLikelyChineseText(fullText)
+					fullText && isLikelyChineseText(fullText)
 						? await summarizeStepwise(fullText)
 						: { status: "no_text" };
 
@@ -202,7 +197,6 @@ async function main() {
 						link,
 						title,
 						cfg.type,
-						fullText,
 					);
 				}
 
@@ -215,7 +209,6 @@ async function main() {
 			console.error(`處理 ${cfg.source} 時發生錯誤:`, err.message);
 		}
 	}
-	console.log("\n任務完成");
 }
 
 async function summarizeStepwise(text) {
@@ -256,40 +249,31 @@ async function fetchArticleText(url) {
 		if (!res.ok) return "";
 		const html = await res.text();
 		const $ = cheerio.load(html);
-
-		// 重要：移除所有不必要的標籤內容
 		$("script, style, iframe, header, footer, nav, .ltnpoll, .ad").remove();
 
 		let rawText = "";
-		// 針對不同媒體的精準選擇器
 		const selectors = [
-			"div.whitecon > div.text", // LTN 常用
-			"div.article-content__editor", // UDN 常用
-			"div.paragraph", // CNA 常用
+			"div.whitecon > div.text",
+			"div.article-content__editor",
+			"div.paragraph",
 			"div.entry-content",
 			"div.article-body",
-			"section.article-content__editor",
 			"div[itemprop='articleBody']",
 		];
-
 		for (const sel of selectors) {
 			const found = $(sel);
 			if (found.length > 0) {
-				// 移除內容中的 JS 代碼塊
 				found.find("script").remove();
 				rawText = found.text();
 				break;
 			}
 		}
-
-		// 如果上述選擇器都沒抓到，嘗試抓取所有 <p> 標籤
 		if (!rawText.trim()) {
 			rawText = $("p")
 				.map((_, el) => $(el).text())
 				.get()
 				.join("\n");
 		}
-
 		return cleanText(rawText).substring(0, MAX_FULLTEXT_LENGTH);
 	} catch (e) {
 		return "";
@@ -299,27 +283,26 @@ async function fetchArticleText(url) {
 function cleanText(text) {
 	if (!text) return "";
 	return text
-		.replace(/const\s.*?\);/gs, "") // 移除內嵌的 JS 代碼
-		.replace(/function\s.*?\{.*?\}/gs, "") // 移除內嵌的 Function
+		.replace(/const\s.*?\);/gs, "")
+		.replace(/function\s.*?\{.*?\}/gs, "")
 		.replace(/\s+/g, " ")
 		.trim();
 }
 
 function isLikelyChineseText(text) {
 	const chineseChars = (text || "").match(/[\u4e00-\u9fff]/g) || [];
-	return chineseChars.length > 50; // 至少要有 50 個中文字才算有效內容
+	return chineseChars.length > 50;
 }
 
 function formatSummary(s) {
 	return `${s.title}\n1. ${s.points[0] || ""}\n2. ${s.points[1] || ""}\n3. ${s.points[2] || ""}`;
 }
 
-async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
+async function sendToDiscord(summaryObj, link, title, type) {
 	const configRaw = process.env.DISCORD_CONFIG;
 	if (!configRaw) return;
 	try {
 		const discordConfigs = JSON.parse(configRaw);
-		const targetWebhooks = new Map();
 		const summaryString = Array.isArray(summaryObj.points)
 			? summaryObj.points.join(" ")
 			: "";
@@ -331,34 +314,29 @@ async function sendToDiscord(summaryObj, link, title, type, fullText = "") {
 			)
 				continue;
 			const matchedKeyword = config.keywords.find(
-				(k) =>
-					title.includes(k) ||
-					summaryString.includes(k) ||
-					(fullText && fullText.includes(k)),
+				(k) => title.includes(k) || summaryString.includes(k),
 			);
-			if (matchedKeyword)
-				targetWebhooks.set(config.webhook, matchedKeyword);
-		}
-		for (const [webhook, keyword] of targetWebhooks) {
-			const payload = {
-				embeds: [
-					{
-						title: `📍 ${keyword}動態：${title}`,
-						url: link,
-						description: `**✨ 新聞摘要：**\n${summaryObj.points
-							.slice(0, 3)
-							.map((p, i) => `${i + 1}. ${p}`)
-							.join("\n")}`,
-						color: 3447003,
-						timestamp: new Date().toISOString(),
-					},
-				],
-			};
-			await fetch(webhook, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(payload),
-			});
+			if (matchedKeyword) {
+				const payload = {
+					embeds: [
+						{
+							title: `📍 ${matchedKeyword}動態：${title}`,
+							url: link,
+							description: `**✨ 新聞摘要：**\n${summaryObj.points
+								.slice(0, 3)
+								.map((p, i) => `${i + 1}. ${p}`)
+								.join("\n")}`,
+							color: 3447003,
+							timestamp: new Date().toISOString(),
+						},
+					],
+				};
+				await fetch(config.webhook, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(payload),
+				});
+			}
 		}
 	} catch (e) {}
 }
