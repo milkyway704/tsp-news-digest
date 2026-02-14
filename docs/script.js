@@ -99,24 +99,38 @@ function applyFilters() {
 	const targetDate = dateEl.value;
 	const targetSource = sourceEl.value;
 	const targetType = typeEl.value;
-	const targetKey = keywordEl.value.toLowerCase();
+
+	// 1. 處理多組關鍵字：轉小寫、去前後空白、依空格切分、過濾掉空字串
+	const searchTerms = keywordEl.value
+		.toLowerCase()
+		.trim()
+		.split(/\s+/)
+		.filter((t) => t !== "");
 
 	filteredNews = allRows.filter((r) => {
 		const d = r[0];
 		const s = r[1];
 		const t = r[2];
-		const title = r[3] || "";
+		const title = (r[3] || "").toLowerCase();
 
-		return (
+		// 基本過濾條件
+		const matchBasic =
 			d === targetDate &&
 			(targetSource === "all" || s === targetSource) &&
-			(targetType === "all" || t === targetType) &&
-			title.toLowerCase().includes(targetKey)
-		);
+			(targetType === "all" || t === targetType);
+
+		if (!matchBasic) return false;
+
+		// 2. 關鍵字過濾邏輯
+		if (searchTerms.length === 0) return true; // 沒輸入關鍵字就通通顯示
+
+		// 【交集模式 AND】：標題必須包含「所有」輸入的關鍵字
+		return searchTerms.every((term) => title.includes(term));
+
+		// 如果你想要【聯集模式 OR】（有其中一個詞就中），請把上面的 .every 改成 .some
 	});
 
 	renderList();
-	// 切換篩選時，如果不是手機版，清空右側內容
 	if (window.innerWidth > 900) {
 		detailEl.innerHTML = "請選擇新聞以查看摘要";
 	}
