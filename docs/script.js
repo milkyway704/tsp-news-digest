@@ -100,7 +100,7 @@ function applyFilters() {
 	const targetSource = sourceEl.value;
 	const targetType = typeEl.value;
 
-	// 1. 處理多組關鍵字：轉小寫、去前後空白、依空格切分、過濾掉空字串
+	// 處理多組關鍵字：依空格切分，支援多組詞比對
 	const searchTerms = keywordEl.value
 		.toLowerCase()
 		.trim()
@@ -112,8 +112,9 @@ function applyFilters() {
 		const s = r[1];
 		const t = r[2];
 		const title = (r[3] || "").toLowerCase();
+		const summary = (r[5] || "").toLowerCase(); // 摘要在第 6 欄 (Index 5)
 
-		// 基本過濾條件
+		// 基本過濾條件 (日期、來源、類型)
 		const matchBasic =
 			d === targetDate &&
 			(targetSource === "all" || s === targetSource) &&
@@ -121,13 +122,14 @@ function applyFilters() {
 
 		if (!matchBasic) return false;
 
-		// 2. 關鍵字過濾邏輯
-		if (searchTerms.length === 0) return true; // 沒輸入關鍵字就通通顯示
+		// 如果沒有輸入關鍵字，直接回傳基本過濾結果
+		if (searchTerms.length === 0) return true;
 
-		// 【交集模式 AND】：標題必須包含「所有」輸入的關鍵字
-		return searchTerms.every((term) => title.includes(term));
-
-		// 如果你想要【聯集模式 OR】（有其中一個詞就中），請把上面的 .every 改成 .some
+		// 同時比對「標題」與「摘要」：
+		// 必須滿足「每一個關鍵字」都要出現在「標題 或 摘要」之中 (AND 邏輯)
+		return searchTerms.every((term) => {
+			return title.includes(term) || summary.includes(term);
+		});
 	});
 
 	renderList();
