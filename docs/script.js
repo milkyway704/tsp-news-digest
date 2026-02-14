@@ -32,6 +32,14 @@ window.onload = () => {
 	typeEl.addEventListener("change", applyFilters);
 	keywordEl.addEventListener("input", applyFilters); // 輸入關鍵字時即時過濾
 
+	// 新增：監聽點擊清除按鈕 (X) 的動作
+	keywordEl.addEventListener("search", () => {
+		// 如果輸入框被清空，立刻執行過濾
+		if (keywordEl.value === "") {
+			applyFilters();
+		}
+	});
+
 	prevDayBtn.addEventListener("click", () => changeDay(-1));
 	nextDayBtn.addEventListener("click", () => changeDay(1));
 
