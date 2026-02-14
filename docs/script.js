@@ -100,21 +100,19 @@ function applyFilters() {
 	const targetSource = sourceEl.value;
 	const targetType = typeEl.value;
 
-	// 處理多組關鍵字：依空格切分，支援多組詞比對
-	const searchTerms = keywordEl.value
-		.toLowerCase()
-		.trim()
-		.split(/\s+/)
-		.filter((t) => t !== "");
+	// 修正點：使用 trim() 先去掉前後空格，再用 split 切分
+	// 這樣「台南 」就不會被切出多餘的空元素
+	const rawInput = keywordEl.value.toLowerCase().trim();
+	const searchTerms = rawInput ? rawInput.split(/\s+/) : [];
 
 	filteredNews = allRows.filter((r) => {
 		const d = r[0];
 		const s = r[1];
 		const t = r[2];
 		const title = (r[3] || "").toLowerCase();
-		const summary = (r[5] || "").toLowerCase(); // 摘要在第 6 欄 (Index 5)
+		const summary = (r[5] || "").toLowerCase();
 
-		// 基本過濾條件 (日期、來源、類型)
+		// 1. 基本過濾 (日期、來源、類型)
 		const matchBasic =
 			d === targetDate &&
 			(targetSource === "all" || s === targetSource) &&
@@ -122,11 +120,11 @@ function applyFilters() {
 
 		if (!matchBasic) return false;
 
-		// 如果沒有輸入關鍵字，直接回傳基本過濾結果
+		// 2. 關鍵字過濾：如果沒有有效關鍵字，直接顯示
 		if (searchTerms.length === 0) return true;
 
-		// 同時比對「標題」與「摘要」：
-		// 必須滿足「每一個關鍵字」都要出現在「標題 或 摘要」之中 (AND 邏輯)
+		// 3. 多組關鍵字比對 (AND 邏輯)
+		// 標題或摘要必須包含「每一個」關鍵字
 		return searchTerms.every((term) => {
 			return title.includes(term) || summary.includes(term);
 		});
