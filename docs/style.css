@@ -6,9 +6,27 @@ body {
     color: #333;
 }
 
+/* 頁首標題區塊 */
+.main-header {
+    background-color: #a73f24; /* 使用你指定的色碼 */
+    color: white;
+    padding: 18px 24px;
+    /* 抵消 body 的 padding 16px，讓標題列貼邊 */
+    margin: -16px -16px 16px -16px; 
+    box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+}
+
+.header-content h1 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase; /* 讓英文標題更有質感 */
+}
+
 .toolbar {
     display: flex;
-    flex-wrap: nowrap; /* 確保桌面版不換行 */
+    flex-wrap: nowrap;
     gap: 8px;
     margin-bottom: 12px;
     align-items: center;
@@ -25,7 +43,6 @@ select, input, button {
     font-size: 14px;
 }
 
-/* 搜尋框的外層容器：設為 flex: 1 讓它填滿剩餘寬度 */
 .search-wrapper {
     position: relative;
     display: flex;
@@ -36,10 +53,9 @@ select, input, button {
 
 #keywordInput {
     width: 100%;
-    padding-right: 30px; /* 為原生打叉按鈕留空間 */
+    padding-right: 30px;
 }
 
-/* 針對 type="search" 的清除按鈕樣式 */
 #keywordInput::-webkit-search-cancel-button {
     -webkit-appearance: none;
     height: 16px;
@@ -50,16 +66,12 @@ select, input, button {
     cursor: pointer;
 }
 
-#keywordInput::-webkit-search-cancel-button:hover {
-    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cline x1='18' y1='6' x2='6' y2='18'%3e%3c/line%3e%3cline x1='6' y1='6' x2='18' y2='18'%3e%3c/line%3e%3c/svg%3e");
-}
-
 button {
     background: #4a6cf7;
     color: white;
     border: none;
     cursor: pointer;
-    white-space: nowrap; /* 防止按鈕文字換行 */
+    white-space: nowrap;
 }
 
 button:hover {
@@ -69,7 +81,8 @@ button:hover {
 .container {
     display: flex;
     gap: 16px;
-    height: calc(100vh - 100px);
+    /* 扣除 header 和 toolbar 的高度 */
+    height: calc(100vh - 160px); 
 }
 
 .left-panel {
@@ -103,7 +116,7 @@ button:hover {
 
 .news-item.active {
     background: #e3edff;
-    border-left: 4px solid #4a6cf7;
+    border-left: 4px solid #a73f24; /* 側邊條也同步改為指定紅色 */
 }
 
 .title {
@@ -129,7 +142,7 @@ button:hover {
 .link {
     display: inline-block;
     margin-top: 20px;
-    color: #4a6cf7;
+    color: #a73f24; /* 原文連結也同步紅色 */
     text-decoration: none;
     font-weight: 500;
 }
@@ -140,11 +153,11 @@ button:hover {
 
 @media (max-width: 900px) {
     .toolbar {
-        flex-wrap: wrap; /* 手機版允許換行 */
+        flex-wrap: wrap;
     }
     .search-wrapper {
         width: 100%;
-        flex: none; /* 手機版不再伸縮，直接佔滿 */
+        flex: none;
     }
     .container {
         flex-direction: column;
@@ -155,13 +168,5 @@ button:hover {
     }
     .right-panel {
         display: none;
-    }
-    .mobile-summary {
-        margin-top: 12px;
-        padding: 12px;
-        background: #f9fafc;
-        border-radius: 6px;
-        font-size: 14px;
-        border: 1px solid #edf2f7;
     }
 }
