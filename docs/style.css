@@ -8,7 +8,7 @@ body {
 
 .toolbar {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap; /* 確保桌面版不換行 */
     gap: 8px;
     margin-bottom: 12px;
     align-items: center;
@@ -25,26 +25,31 @@ select, input, button {
     font-size: 14px;
 }
 
-/* 搜尋框的外層容器，確保佈局穩定 */
+/* 搜尋框的外層容器：設為 flex: 1 讓它填滿剩餘寬度 */
 .search-wrapper {
     position: relative;
     display: flex;
     align-items: center;
+    flex: 1; 
+    min-width: 150px;
 }
 
-/* 針對 type="search" 的清除按鈕進行樣式微調 */
+#keywordInput {
+    width: 100%;
+    padding-right: 30px; /* 為原生打叉按鈕留空間 */
+}
+
+/* 針對 type="search" 的清除按鈕樣式 */
 #keywordInput::-webkit-search-cancel-button {
     -webkit-appearance: none;
     height: 16px;
     width: 16px;
-    margin-left: 8px;
     background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cline x1='18' y1='6' x2='6' y2='18'%3e%3c/line%3e%3cline x1='6' y1='6' x2='18' y2='18'%3e%3c/line%3e%3c/svg%3e");
     background-repeat: no-repeat;
     background-size: contain;
     cursor: pointer;
 }
 
-/* 滑鼠移上去時顏色變深 */
 #keywordInput::-webkit-search-cancel-button:hover {
     background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3e%3cline x1='18' y1='6' x2='6' y2='18'%3e%3c/line%3e%3cline x1='6' y1='6' x2='18' y2='18'%3e%3c/line%3e%3c/svg%3e");
 }
@@ -54,6 +59,7 @@ button {
     color: white;
     border: none;
     cursor: pointer;
+    white-space: nowrap; /* 防止按鈕文字換行 */
 }
 
 button:hover {
@@ -133,6 +139,13 @@ button:hover {
 }
 
 @media (max-width: 900px) {
+    .toolbar {
+        flex-wrap: wrap; /* 手機版允許換行 */
+    }
+    .search-wrapper {
+        width: 100%;
+        flex: none; /* 手機版不再伸縮，直接佔滿 */
+    }
     .container {
         flex-direction: column;
         height: auto;
