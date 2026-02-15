@@ -6,14 +6,19 @@ body {
     color: #333;
 }
 
-/* 頁首標題區塊 */
+/* 頁首標題區塊 - 修正為固定定位 */
 .main-header {
-    background-color: #a73f24; /* 使用你指定的色碼 */
+    background-color: #a73f24;
     color: white;
     padding: 18px 24px;
     /* 抵消 body 的 padding 16px，讓標題列貼邊 */
     margin: -16px -16px 16px -16px; 
     box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+
+    /* 固定在頂端的核心設定 */
+    position: sticky;
+    top: 0;
+    z-index: 1000;
 }
 
 .header-content h1 {
@@ -21,7 +26,18 @@ body {
     font-size: 20px;
     font-weight: 700;
     letter-spacing: 0.5px;
-    text-transform: uppercase; /* 讓英文標題更有質感 */
+    text-transform: uppercase;
+}
+
+/* 標題連結樣式 */
+.header-link {
+    color: white;
+    text-decoration: none;
+    transition: opacity 0.2s;
+}
+
+.header-link:hover {
+    opacity: 0.85;
 }
 
 .toolbar {
@@ -34,6 +50,10 @@ body {
     padding: 12px;
     border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    
+    /* 確保 toolbar 在滾動時不會跟標題打架 */
+    position: relative;
+    z-index: 999;
 }
 
 select, input, button {
@@ -81,7 +101,7 @@ button:hover {
 .container {
     display: flex;
     gap: 16px;
-    /* 扣除 header 和 toolbar 的高度 */
+    /* 扣除 header 和 toolbar 的高度空間 */
     height: calc(100vh - 160px); 
 }
 
@@ -116,7 +136,7 @@ button:hover {
 
 .news-item.active {
     background: #e3edff;
-    border-left: 4px solid #a73f24; /* 側邊條也同步改為指定紅色 */
+    border-left: 4px solid #a73f24;
 }
 
 .title {
@@ -142,7 +162,7 @@ button:hover {
 .link {
     display: inline-block;
     margin-top: 20px;
-    color: #a73f24; /* 原文連結也同步紅色 */
+    color: #a73f24;
     text-decoration: none;
     font-weight: 500;
 }
@@ -165,6 +185,8 @@ button:hover {
     }
     .left-panel {
         max-width: 100%;
+        /* 行動版讓內容捲動更流暢 */
+        overflow-y: visible; 
     }
     .right-panel {
         display: none;
