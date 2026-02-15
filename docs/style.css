@@ -4,7 +4,6 @@ body {
     padding: 16px;
     margin: 0;
     color: #333;
-    /* 確保手機版 sticky 運作正常的關鍵：不要在 body 層級設定 overflow-x: hidden */
 }
 
 /* 頁首標題區塊 */
@@ -17,7 +16,7 @@ body {
     box-shadow: 0 2px 5px rgba(0,0,0,0.15);
 
     /* 固定在頂端 */
-    position: -webkit-sticky; /* 支援 Safari 手機版 */
+    position: -webkit-sticky; 
     position: sticky;
     top: 0;
     z-index: 1000;
@@ -37,8 +36,8 @@ body {
 .header-link:visited, 
 .header-link:hover, 
 .header-link:active {
-    color: white !important;      /* 強制維持白色 */
-    text-decoration: none !important; /* 強制移除底線 */
+    color: white !important;      
+    text-decoration: none !important; 
     outline: none;
 }
 
@@ -52,8 +51,6 @@ body {
     padding: 12px;
     border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    
-    /* 確保在捲動時不會疊在 Header 上面 */
     position: relative;
     z-index: 99;
 }
@@ -160,16 +157,18 @@ button:hover {
     color: #2d3748;
 }
 
+/* 修正點：將前往原文連結改回藍色 */
 .link {
     display: inline-block;
     margin-top: 20px;
-    color: #a73f24;
+    color: #0000ee; /* 標準連結藍 */
     text-decoration: none;
     font-weight: 500;
 }
 
 .link:hover {
     text-decoration: underline;
+    color: #0000aa; /* 懸停時稍深的藍色 */
 }
 
 @media (max-width: 900px) {
@@ -186,7 +185,7 @@ button:hover {
     }
     .left-panel {
         max-width: 100%;
-        overflow-y: visible; /* 讓手機版整體滑動更流暢 */
+        overflow-y: visible; 
     }
     .right-panel {
         display: none;
