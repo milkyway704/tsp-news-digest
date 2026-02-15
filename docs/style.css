@@ -4,18 +4,20 @@ body {
     padding: 16px;
     margin: 0;
     color: #333;
+    /* 確保手機版 sticky 運作正常的關鍵：不要在 body 層級設定 overflow-x: hidden */
 }
 
-/* 頁首標題區塊 - 修正為固定定位 */
+/* 頁首標題區塊 */
 .main-header {
-    background-color: #a73f24;
+    background-color: #a73f24; 
     color: white;
     padding: 18px 24px;
-    /* 抵消 body 的 padding 16px，讓標題列貼邊 */
+    /* 抵消 body 的 padding，讓標題列貼邊 */
     margin: -16px -16px 16px -16px; 
     box-shadow: 0 2px 5px rgba(0,0,0,0.15);
 
-    /* 固定在頂端的核心設定 */
+    /* 固定在頂端 */
+    position: -webkit-sticky; /* 支援 Safari 手機版 */
     position: sticky;
     top: 0;
     z-index: 1000;
@@ -29,15 +31,15 @@ body {
     text-transform: uppercase;
 }
 
-/* 標題連結樣式 */
-.header-link {
-    color: white;
-    text-decoration: none;
-    transition: opacity 0.2s;
-}
-
-.header-link:hover {
-    opacity: 0.85;
+/* 標題連結樣式：徹底消除超連結預設行為 */
+.header-link, 
+.header-link:link, 
+.header-link:visited, 
+.header-link:hover, 
+.header-link:active {
+    color: white !important;      /* 強制維持白色 */
+    text-decoration: none !important; /* 強制移除底線 */
+    outline: none;
 }
 
 .toolbar {
@@ -51,9 +53,9 @@ body {
     border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     
-    /* 確保 toolbar 在滾動時不會跟標題打架 */
+    /* 確保在捲動時不會疊在 Header 上面 */
     position: relative;
-    z-index: 999;
+    z-index: 99;
 }
 
 select, input, button {
@@ -101,7 +103,6 @@ button:hover {
 .container {
     display: flex;
     gap: 16px;
-    /* 扣除 header 和 toolbar 的高度空間 */
     height: calc(100vh - 160px); 
 }
 
@@ -185,8 +186,7 @@ button:hover {
     }
     .left-panel {
         max-width: 100%;
-        /* 行動版讓內容捲動更流暢 */
-        overflow-y: visible; 
+        overflow-y: visible; /* 讓手機版整體滑動更流暢 */
     }
     .right-panel {
         display: none;
